@@ -1,0 +1,118 @@
+kind: StatefulSet
+apiVersion: apps/v1
+metadata:
+  name: sibr-cassandra
+  namespace: default
+  selfLink: /apis/apps/v1/namespaces/default/statefulsets/cassandra
+  uid: 715f1088-0512-4d60-a442-5f83a7b0623b
+  resourceVersion: '46083527'
+  generation: 2
+  creationTimestamp: '2020-07-29T22:19:08Z'
+  labels:
+    app: sibr-cassandra
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: sibr-cassandra
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: sibr-cassandra
+    spec:
+      containers:
+        - name: sibr-cassandra
+          image: 'gcr.io/google-samples/cassandra:v13'
+          ports:
+            - name: intra-node
+              containerPort: 7000
+              protocol: TCP
+            - name: tls-intra-node
+              containerPort: 7001
+              protocol: TCP
+            - name: jmx
+              containerPort: 7199
+              protocol: TCP
+            - name: cql
+              containerPort: 9042
+              protocol: TCP
+          env:
+            - name: MAX_HEAP_SIZE
+              value: 512M
+            - name: HEAP_NEWSIZE
+              value: 100M
+            - name: CASSANDRA_SEEDS
+              value: cassandra-0.cassandra.default.svc.cluster.local
+            - name: CASSANDRA_CLUSTER_NAME
+              value: K8Demo
+            - name: CASSANDRA_DC
+              value: DC1-K8Demo
+            - name: CASSANDRA_RACK
+              value: Rack1-K8Demo
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  apiVersion: v1
+                  fieldPath: status.podIP
+          resources:
+            limits:
+              cpu: 500m
+              memory: 750m
+            requests:
+              cpu: 500m
+              memory: 750m
+          volumeMounts:
+            - name: sibr-cassandra-data
+              mountPath: /cassandra_data
+          readinessProbe:
+            exec:
+              command:
+                - /bin/bash
+                - '-c'
+                - /ready-probe.sh
+            initialDelaySeconds: 15
+            timeoutSeconds: 5
+            periodSeconds: 10
+            successThreshold: 1
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - /bin/sh
+                  - '-c'
+                  - nodetool drain
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          imagePullPolicy: Always
+          securityContext:
+            capabilities:
+              add:
+                - IPC_LOCK
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 1800
+      dnsPolicy: ClusterFirst
+      securityContext: {}
+      schedulerName: default-scheduler
+  volumeClaimTemplates:
+    - metadata:
+        name: sibr-cassandra-data
+        creationTimestamp: null
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 1Gi
+        storageClassName: do-block-storage
+        volumeMode: Filesystem
+      status:
+        phase: Pending
+  serviceName: sibr-cassandra
+  podManagementPolicy: OrderedReady
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      partition: 0
+  revisionHistoryLimit: 10
