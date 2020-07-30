@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   pitcher_id uuid,
   home_score smallInt,
   away_score smallInt,
+  pitches list<varchar(1)>,
   is_leadoff boolean,
   is_pinch_hit boolean,
   lineup_position smallInt, # not sure if we have access to this
