@@ -103,13 +103,45 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
   perceived_ended_at timestamp
 );
 
-CREATE TABLE IF NOT EXISTS blaseball.game_events_numeric(
+CREATE TYPE blaseball.event_base_runner(
+  runner_id uuid,
+  responsible_pitcher_id uuid,
+  base_before_play tinyInt,
+  base_after_play tinyInt,
+  was_base_stolen boolean,
+  was_caught_stealing boolean,
+  was_picked_off boolean,
+);
+
+CREATE TABLE IF NOT EXISTS blaseball.game_events(
   perceived_at timestamp,
   game_id uuid,
   event_type text,
-  player_id uuid,
-  inning smallInt,
-  numeric_value decimal,
-  string_value text,
-  PRIMARY KEY (game_id, perceived_at)
+  event_index int,
+  inning tinyInt,
+  outs_before_play tinyInt,
+  batter_id uuid,
+  pitcher_id uuid,
+  home_score smallInt,
+  away_score smallInt,
+  is_leadoff boolean,
+  is_pinch_hit boolean,
+  lineup_position smallInt, # not sure if we have access to this
+  is_last_event_for_at_bat boolean,
+  bases_hit tinyInt,
+  is_sacrifice_hit boolean,
+  is_sacrifice_fly boolean,
+  outs_on_play tinyInt,
+  is_double_play boolean,
+  is_triple_play boolean,
+  is_wild_pitch boolean,
+  batted_ball_type text,
+  is_bunt boolean,
+  errors_on_play tinyInt,
+  batter_base_after_play tinyInt,
+  base_runners list<FROZEN<blaseball.event_base_runner>>,
+  is_last_game_event boolean,
+  additional_context text,
+  PRIMARY KEY (game_id, event_index)
 );
+
