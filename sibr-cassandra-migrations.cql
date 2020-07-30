@@ -94,16 +94,18 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
   series_index smallInt,
   series_length smallInt,
   shame boolean,
-  weather smallInt
+  weather smallInt,
+  perceived_started_at timestamp,
+  perceived_ended_at timestamp
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.game_events_numeric(
-  percieved_time timestamp,
+  perceived_time timestamp,
   game_id uuid,
   event_type text,
   player_id uuid,
   inning smallInt,
   numeric_value decimal,
   string_value text,
-  PRIMARY KEY (game_id, percieved_time)
+  PRIMARY KEY (game_id, perceived_time)
 );
