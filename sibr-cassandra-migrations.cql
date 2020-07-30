@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS blaseball.subleagues(
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.players(
-  id uuid PRIMARY KEY,
+  id uuid,
   name text,
   anticapitalism decimal,
   baseThirst decimal,
@@ -44,11 +44,13 @@ CREATE TABLE IF NOT EXISTS blaseball.players(
   deceased boolean,
   started_career_at timestamp,
   ended_career_at timestamp,
-  active boolean
+  active boolean,
+  perceived_at timestamp,
+  PRIMARY KEY (id, perceived_at)
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.teams(
-  id uuid PRIMARY KEY,
+  id uuid,
   division_id uuid,
   fullName text,
   location text,
@@ -64,7 +66,9 @@ CREATE TABLE IF NOT EXISTS blaseball.teams(
   seasonShames smallInt,
   seasonShamings smallInt,
   championships smallInt,
-  active boolean
+  active boolean,
+  perceived_at timestamp,
+  PRIMARY KEY (id, perceived_at)
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.team_members(
@@ -100,12 +104,12 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.game_events_numeric(
-  perceived_time timestamp,
+  perceived_at timestamp,
   game_id uuid,
   event_type text,
   player_id uuid,
   inning smallInt,
   numeric_value decimal,
   string_value text,
-  PRIMARY KEY (game_id, perceived_time)
+  PRIMARY KEY (game_id, perceived_at)
 );
