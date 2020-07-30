@@ -41,7 +41,10 @@ CREATE TABLE IF NOT EXISTS blaseball.players(
   pressurization decimal,
   totalFingers smallInt,
   soul smallInt,
-  deceased boolean
+  deceased boolean,
+  started_career_at timestamp,
+  ended_career_at timestamp,
+  active boolean
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.teams(
@@ -60,7 +63,8 @@ CREATE TABLE IF NOT EXISTS blaseball.teams(
   totalShamings smallInt,
   seasonShames smallInt,
   seasonShamings smallInt,
-  championships smallInt
+  championships smallInt,
+  active boolean
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.team_members(
@@ -68,8 +72,8 @@ CREATE TABLE IF NOT EXISTS blaseball.team_members(
   team_id uuid, 
   player_id uuid,
   started_at timestamp,
-  ended_at timestamp
-) WITH CLUSTERING ORDER BY (team_id ASC);
+  ended_at timestamp,
+);
 
 CREATE TABLE IF NOT EXISTS blaseball.games(
   id uuid PRIMARY KEY,
@@ -94,11 +98,12 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
 );
 
 CREATE TABLE IF NOT EXISTS blaseball.game_events_numeric(
-  id uuid PRIMARY KEY,
+  percieved_time timestamp,
   game_id uuid,
   event_type text,
   player_id uuid,
   inning smallInt,
   numeric_value decimal,
-  string_value text
-) WITH CLUSTERING ORDER BY (game_id ASC);
+  string_value text,
+  PRIMARY KEY (game_id, percieved_time)
+);
