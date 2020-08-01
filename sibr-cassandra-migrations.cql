@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   pitcher_team_id uuid,
   home_score smallInt,
   away_score smallInt,
+  home_strike_count smallInt,
+  away_strike_count smallInt,
+  batter_count int,
   pitches list<varchar(1)>,
   total_strikes smallInt,
   total_balls smallInt,
@@ -135,6 +138,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   lineup_position smallInt, # not sure if we have access to this
   is_last_event_for_at_bat boolean,
   bases_hit tinyInt,
+  runs_batted_in tinyInt,
   is_sacrifice_hit boolean,
   is_sacrifice_fly boolean,
   outs_on_play tinyInt,
