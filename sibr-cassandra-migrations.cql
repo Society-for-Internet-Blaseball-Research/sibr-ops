@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   event_type text,
   event_index int,
   inning tinyInt,
+  top_of_inning boolean,
   outs_before_play tinyInt,
   batter_id uuid,
   batter_team_id uuid,
@@ -151,6 +152,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   batter_base_after_play tinyInt,
   base_runners list<FROZEN<blaseball.event_base_runner>>,
   is_last_game_event boolean,
+  misc_events list<varchar(32)>,
   additional_context text,
   PRIMARY KEY (game_id, event_index)
 );
