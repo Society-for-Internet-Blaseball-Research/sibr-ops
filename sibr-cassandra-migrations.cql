@@ -113,6 +113,11 @@ CREATE TYPE blaseball.event_base_runner(
   was_picked_off boolean,
 );
 
+CREATE TYPE blaseball.player_event(
+  player_id uuid,
+  event_type varchar(32),
+);
+
 CREATE TABLE IF NOT EXISTS blaseball.game_events(
   perceived_at timestamp,
   game_id uuid,
@@ -152,7 +157,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   batter_base_after_play tinyInt,
   base_runners list<FROZEN<blaseball.event_base_runner>>,
   is_last_game_event boolean,
-  misc_events list<varchar(32)>,
+  player_events list<FROZEN<blaseball.player_event>>,
   additional_context text,
   PRIMARY KEY (game_id, event_index)
 );
