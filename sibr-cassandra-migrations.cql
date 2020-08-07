@@ -182,7 +182,8 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   batter_base_after_play tinyInt, # The number of batters on base after the play.
   base_runners list<FROZEN<blaseball.event_base_runner>>, # The base runners at the start and end of the play (see event_base_runner).
   is_last_game_event boolean, # Is this the last event in the game?
-  player_events list<FROZEN<blaseball.player_event>>, # The player events that occurred in the play (incinerations, etc)
+  player_events list<FROZEN<blaseball.player_event>>, # The player events that occurred in the play (incinerations, etc).
+  event_text list<text>, # The message text descriptions that contributed to this event.
   additional_context text, # Free space for your own comments.
   PRIMARY KEY (game_id, event_index)
 );
