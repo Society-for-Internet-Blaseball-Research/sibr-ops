@@ -103,7 +103,7 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
   perceived_ended_at timestamp // The time this game ended as seen by the client.
 );
 
-CREATE TYPE blaseball.event_base_runner(
+CREATE TYPE blaseball.game_event_base_runner(
   runner_id uuid, // The ID of the player that is on base.
   responsible_pitcher_id uuid, // The ID of the pitcher that is responsible for the runner.
   base_before_play tinyInt, // The base of the runner at the start of the play (see game_events). 0 - not on base at the start of the play.
@@ -180,7 +180,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   is_bunt boolean, // Was this play a bunt?
   errors_on_play tinyInt, // The number of errors that occurred on the play.
   batter_base_after_play tinyInt, // The number of batters on base after the play.
-  base_runners list<FROZEN<blaseball.event_base_runner>>, // The base runners at the start and end of the play (see event_base_runner).
+  base_runners list<FROZEN<blaseball.game_event_base_runner>>, // The base runners at the start and end of the play (see event_base_runner).
   is_last_game_event boolean, // Is this the last event in the game?
   player_events list<FROZEN<blaseball.player_event>>, // The player events that occurred in the play (incinerations, etc).
   event_text list<text>, // The message text descriptions that contributed to this event.
