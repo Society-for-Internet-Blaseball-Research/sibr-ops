@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS blaseball.games(
   series_index smallInt, // What game in the series this is (1-indexed).
   series_length smallInt, // The number of games in the series.
   shame boolean, // Did this game end in shame?
-  weather varchar(64), // The weather for this game.
+  weather text, // The weather for this game.
   perceived_started_at timestamp, // The first time this game was seen by the client.
   perceived_ended_at timestamp // The time this game ended as seen by the client.
 );
@@ -120,7 +120,7 @@ CREATE TYPE blaseball.event_base_runner(
 
 CREATE TYPE blaseball.player_event(
   player_id uuid, // The player that was affected by the event.
-  event_type varchar(32), // The type of the event.
+  event_type text, // The type of the event.
 );
 
 // Game event types:
@@ -160,7 +160,7 @@ CREATE TABLE IF NOT EXISTS blaseball.game_events(
   home_strike_count smallInt, // The number of strikes required to strike out a batter on the home team.
   away_strike_count smallInt, // The number of strikes required to strike out a batter on the away team.
   batter_count int, // The total number of batters to take the plate in this game.
-  pitches list<varchar(1)>, // The pitches in this play. See Retrosheet for symbology.
+  pitches list<text>, // The pitches in this play. See Retrosheet for symbology.
   total_strikes smallInt, // The total number of strikes that occurred in the play.
   total_balls smallInt, // The total number of balls that occurred in the play.
   total_fouls smallInt, // The total number of foul balls that occurred in the play (not currently trackable).
