@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS game_event_base_runners(
  * PEANUT_GOOD - The player had a yummy reaction!
  * PEANUT_BAD - The player had an allergic reaction!
  */
-CREATE TABLE IF NOT EXISTS player_event(
+CREATE TABLE IF NOT EXISTS player_events(
   id SERIAL PRIMARY KEY,
   game_event_id integer REFERENCES game_events(id) ON DELETE CASCADE,
   player_id varchar(36), /* The player that was affected by the event. */
