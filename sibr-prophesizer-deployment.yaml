@@ -15,7 +15,7 @@ spec:
         app: prophesizer
     spec:
       containers:
-      - image: corvimae/prophesizer:1.0.1
+      - image: corvimae/prophesizer:1.0.4
         imagePullPolicy: Always
         name: prophesizer
         resources: {}

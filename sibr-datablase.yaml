@@ -1,0 +1,71 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sibr-datablase
+  labels:
+    app: sibr-datablase
+    version: 1.0.0
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sibr-datablase
+  template:
+    metadata:
+      labels:
+        app: sibr-datablase
+    spec:
+      containers:
+      - name: sibr-datablase
+        image: corvimae/datablase:1.0.7
+        ports:
+        - containerPort: 3000
+        env:
+          - name: PGHOST
+            valueFrom:
+              secretKeyRef:
+                name: datablase-secrets
+                key: pgHost
+          - name: PGPORT
+            valueFrom:
+              secretKeyRef:
+                name: datablase-secrets
+                key: pgPort
+          - name: PGDATABASE
+            valueFrom:
+              secretKeyRef:
+                name: datablase-secrets
+                key: pgDatabase
+          - name: PGUSER
+            valueFrom:
+              secretKeyRef:
+                name: datablase-secrets
+                key: pgUser
+          - name: PGPASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: datablase-secrets
+                key: pgPassword
+          - name: SIBR_PRODUCTION
+            value: "1"
+---
+kind: Ingress
+apiVersion: extensions/v1beta1
+metadata:
+  name: sibr-datablase-ingress
+  namespace: default
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    kubernetes.io/ingress.class: nginx
+spec:
+  tls:
+    - hosts:
+        - api.blaseball-reference.com
+      secretName: api-tls
+  rules:
+    - host: api.blaseball-reference.com
+      http:
+        paths:
+          - backend:
+              serviceName: sibr-datablase
+              servicePort: 3000
