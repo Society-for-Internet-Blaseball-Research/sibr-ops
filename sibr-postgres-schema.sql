@@ -95,7 +95,7 @@ CREATE TABLE IF NOT EXISTS player_events(
 );
 
   
-CREATE TABLE IF NOT EXISTS game(
+CREATE TABLE IF NOT EXISTS games(
   game_id varchar(36) PRIMARY KEY, /* Use the uuid as the primary key */
   day int,
   season int,
