@@ -124,7 +124,24 @@ CREATE TABLE IF NOT EXISTS games(
   rules_id varchar(36),
   statsheet_id varchar(36)
 );
-  
+
+CREATE TABLE IF NOT EXISTS teams(
+	id SERIAL PRIMARY KEY,
+	team_id varchar(36),
+	location text,
+	nickname text,
+	full_name text,
+	valid_until timestamp
+);
+
+CREATE TABLE IF NOT EXISTS players(
+	id SERIAL PRIMARY KEY,
+	player_id varchar(36),
+	valid_until timestamp,
+	name varchar,
+	deceased bool
+);
+
 CREATE TABLE IF NOT EXISTS time_map(
 	season int,
 	day int ,
