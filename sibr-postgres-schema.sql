@@ -124,3 +124,10 @@ CREATE TABLE IF NOT EXISTS games(
   rules_id varchar(36),
   statsheet_id varchar(36)
 );
+  
+CREATE TABLE IF NOT EXISTS time_map(
+	season int,
+	day int ,
+	first_time timestamp,
+	PRIMARY KEY(season, day)
+);
