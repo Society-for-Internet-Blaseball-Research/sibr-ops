@@ -93,3 +93,34 @@ CREATE TABLE IF NOT EXISTS player_events(
   player_id varchar(36), /* The player that was affected by the event. */
   event_type text /* The type of the event. */
 );
+
+  
+CREATE TABLE IF NOT EXISTS game(
+  game_id varchar(36) PRIMARY KEY, /* Use the uuid as the primary key */
+  day int,
+  season int,
+  last_game_event int,
+  home_odds decimal,
+  away_odds decimal,
+  weather int,
+
+  /* Things that could be calculated instead but might be nice if blaseball format changes */
+  series_index int,
+  series_length int,
+  is_postseason bool,
+
+  /* Things that we technically could get from looking up the last game event */
+  /* (In the order that they should be here too) */
+  home_team varchar(36),
+  away_team varchar(36),
+  home_score int,
+  away_score int,
+  number_of_innings int,
+  ended_on_top_of_inning boolean,
+  ended_in_shame boolean,
+
+  /* Things we don't know what they do yet but may be important later */
+  terminology_id varchar(36),
+  rules_id varchar(36),
+  statsheet_id varchar(36)
+);
