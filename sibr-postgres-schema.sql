@@ -131,7 +131,8 @@ CREATE TABLE IF NOT EXISTS teams(
 	location text,
 	nickname text,
 	full_name text,
-	valid_until timestamp
+	hash uuid,
+	valid_until timestamp,
 );
 
 CREATE TABLE IF NOT EXISTS players(
