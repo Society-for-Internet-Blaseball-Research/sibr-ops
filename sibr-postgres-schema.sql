@@ -174,3 +174,12 @@ delete from imported logs where key like 'compressed-hourly%';
 truncate players cascade;
 truncate teams cascade;
 end;$$
+	
+create procedure wipe_events()
+language plpgsql    
+as $$
+begin
+truncate game_events cascade;
+delete from imported_logs where key = 'baseball-log%';
+truncate time_map;
+end;$$
