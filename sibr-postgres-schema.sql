@@ -152,3 +152,24 @@ CREATE TABLE IF NOT EXISTS time_map(
 	first_time timestamp,
 	PRIMARY KEY(season, day)
 );
+
+	
+create procedure wipe_all()
+language plpgsql    
+as $$
+begin
+truncate game_events cascade;
+truncate players cascade;
+truncate teams cascade;
+truncate imported_logs;
+truncate time_map;
+end;$$
+	
+create procedure wipe_hourly()
+language plpgsql    
+as $$
+begin
+delete from imported logs where key like 'blaseball-hourly*';
+truncate players cascade;
+truncate teams cascade;
+end;$$
