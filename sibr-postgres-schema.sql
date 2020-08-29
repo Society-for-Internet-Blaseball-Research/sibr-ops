@@ -163,6 +163,7 @@ truncate players cascade;
 truncate teams cascade;
 truncate imported_logs;
 truncate time_map;
+truncate games;
 end;$$
 	
 create procedure wipe_hourly()
