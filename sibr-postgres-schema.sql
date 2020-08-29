@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS game_events(
   is_last_game_event boolean, /* Is this the last event in the game? */
   event_text text[], /* The message text descriptions that contributed to this event. */
   additional_context text /* Free space for your own comments. */
+  season int,
+  day int
 );
 
 CREATE TABLE IF NOT EXISTS game_event_base_runners(
