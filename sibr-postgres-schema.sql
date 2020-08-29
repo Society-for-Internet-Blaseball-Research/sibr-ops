@@ -170,7 +170,7 @@ create procedure wipe_hourly()
 language plpgsql    
 as $$
 begin
-delete from imported logs where key like 'blaseball-hourly*';
+delete from imported logs where key like 'compressed-hourly%';
 truncate players cascade;
 truncate teams cascade;
 end;$$
