@@ -67,6 +67,8 @@ CREATE TABLE IF NOT EXISTS game_events(
   is_last_game_event boolean, /* Is this the last event in the game? */
   event_text text[], /* The message text descriptions that contributed to this event. */
   additional_context text /* Free space for your own comments. */
+  season int,
+  day int
 );
 
 CREATE TABLE IF NOT EXISTS game_event_base_runners(
@@ -93,3 +95,91 @@ CREATE TABLE IF NOT EXISTS player_events(
   player_id varchar(36), /* The player that was affected by the event. */
   event_type text /* The type of the event. */
 );
+
+  
+CREATE TABLE IF NOT EXISTS games(
+  game_id varchar(36) PRIMARY KEY, /* Use the uuid as the primary key */
+  day int,
+  season int,
+  last_game_event int,
+  home_odds decimal,
+  away_odds decimal,
+  weather int,
+
+  /* Things that could be calculated instead but might be nice if blaseball format changes */
+  series_index int,
+  series_length int,
+  is_postseason bool,
+
+  /* Things that we technically could get from looking up the last game event */
+  /* (In the order that they should be here too) */
+  home_team varchar(36),
+  away_team varchar(36),
+  home_score int,
+  away_score int,
+  number_of_innings int,
+  ended_on_top_of_inning boolean,
+  ended_in_shame boolean,
+
+  /* Things we don't know what they do yet but may be important later */
+  terminology_id varchar(36),
+  rules_id varchar(36),
+  statsheet_id varchar(36)
+);
+
+CREATE TABLE IF NOT EXISTS teams(
+	id SERIAL PRIMARY KEY,
+	team_id varchar(36),
+	location text,
+	nickname text,
+	full_name text,
+	hash uuid,
+	valid_until timestamp,
+);
+
+CREATE TABLE IF NOT EXISTS players(
+	id SERIAL PRIMARY KEY,
+	player_id varchar(36),
+	valid_until timestamp,
+	player_name varchar,
+	deceased bool,
+	hash uuid,
+);
+
+CREATE TABLE IF NOT EXISTS time_map(
+	season int,
+	day int ,
+	first_time timestamp,
+	PRIMARY KEY(season, day)
+);
+
+	
+create procedure wipe_all()
+language plpgsql    
+as $$
+begin
+truncate game_events cascade;
+truncate players cascade;
+truncate teams cascade;
+truncate imported_logs;
+truncate time_map;
+truncate games;
+end;$$
+	
+create procedure wipe_hourly()
+language plpgsql    
+as $$
+begin
+delete from imported logs where key like 'compressed-hourly%';
+truncate players cascade;
+truncate teams cascade;
+end;$$
+	
+create procedure wipe_events()
+language plpgsql    
+as $$
+begin
+truncate game_events cascade;
+delete from imported_logs where key = 'baseball-log%';
+truncate time_map;
+end;$$
