@@ -66,7 +66,7 @@ CREATE TABLE IF NOT EXISTS game_events(
   batter_base_after_play smallint, /* The number of batters on base after the play. */
   is_last_game_event boolean, /* Is this the last event in the game? */
   event_text text[], /* The message text descriptions that contributed to this event. */
-  additional_context text /* Free space for your own comments. */
+  additional_context text, /* Free space for your own comments. */
   season int,
   day int
 );
@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS teams(
 	nickname text,
 	full_name text,
 	hash uuid,
-	valid_until timestamp,
+	valid_until timestamp
 );
 
 CREATE TABLE IF NOT EXISTS players(
@@ -143,7 +143,7 @@ CREATE TABLE IF NOT EXISTS players(
 	valid_until timestamp,
 	player_name varchar,
 	deceased bool,
-	hash uuid,
+	hash uuid
 );
 
 CREATE TABLE IF NOT EXISTS time_map(
