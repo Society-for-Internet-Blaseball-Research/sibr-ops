@@ -91,7 +91,7 @@ backup() {
         DATABASE_TYPE=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.database\"])
         BACKUP_VOLUMES=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
 
-        if [[ -n $DATABASE_TYPE ]]; then
+        if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
             # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
 
             BORG_USER=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
@@ -100,7 +100,7 @@ backup() {
 
             case $DATABASE_TYPE in
                 postgres|postgresql|psql)
-                    info "Starting backup of $CONTAINER_ID into $ARCHIVE_NAME via pg_dump"
+                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
 
                     docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create                         \
                         --verbose                           \
@@ -114,7 +114,7 @@ backup() {
                 ;;
 
                 mariadb|mysql)
-                    info "Starting backup of $CONTAINER_ID into $ARCHIVE_NAME via mysqldump"
+                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
 
                     docker exec -u 0 -i $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS $BORG_DB | /usr/local/bin/borg create \
                         --verbose                           \
@@ -128,18 +128,18 @@ backup() {
                 ;;
 
                 *)
-                    info "Failing to backup $CONTAINER_ID into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
+                    info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
                 ;;
 
             esac
         fi
         
         if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-            info "Starting backup of volumes of $CONTAINER_ID into $ARCHIVE_NAME"
+            info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
             MOUNT_EXCLUSION=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.exclude\"])
 
-            MOUNTS=()
-            MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+            # MOUNTS=()
+            # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
             if [[ -n $MOUNT_EXCLUSION ]]; then
                 /usr/local/bin/borg create \
@@ -152,7 +152,7 @@ backup() {
                     --exclude-caches \
                     --exclude "$MOUNT_EXCLUSION" \
                     ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                    "${MOUNTS[@]}"
+                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
             else
                 /usr/local/bin/borg create \
                     --verbose \
@@ -163,7 +163,7 @@ backup() {
                     --compression $COMPRESSION_LEVEL \
                     --exclude-caches \
                     ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                    "${MOUNTS[@]}"
+                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
             fi
         fi
 
@@ -177,15 +177,28 @@ backup() {
 
         info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
 
-        /usr/local/bin/borg prune \
-            --list \
-            --prefix "{hostname}-$ARCHIVE_NAME-" \
-            --show-rc \
-            --keep-daily $KEEP_DAILY \
-            --keep-weekly $KEEP_WEEKLY \
-            --keep-monthly $KEEP_MONTHLY \
-            --keep-yearly $KEEP_YEARLY
-    done 3< <(docker ps --format '{{.ID}}')
+        if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+            /usr/local/bin/borg prune \
+                --list \
+                --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
+                --show-rc \
+                --keep-daily $KEEP_DAILY \
+                --keep-weekly $KEEP_WEEKLY \
+                --keep-monthly $KEEP_MONTHLY \
+                --keep-yearly $KEEP_YEARLY
+        fi
+
+        if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+            /usr/local/bin/borg prune \
+                --list \
+                --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
+                --show-rc \
+                --keep-daily $KEEP_DAILY \
+                --keep-weekly $KEEP_WEEKLY \
+                --keep-monthly $KEEP_MONTHLY \
+                --keep-yearly $KEEP_YEARLY
+        fi
+    done 3< <(docker ps --format '{{.ID}}' --filter "label=dev.sibr.borg.name")
 }
 
 # Backup to our local repo
