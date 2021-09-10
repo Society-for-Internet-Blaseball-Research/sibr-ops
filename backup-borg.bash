@@ -48,7 +48,6 @@ backup() {
         ::'{hostname}-core-{now}' \
         /var \
         /srv \
-        /root \
         /etc \
         /storage
 
