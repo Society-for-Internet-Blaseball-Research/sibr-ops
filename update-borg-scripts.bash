@@ -1,8 +1,8 @@
 #!/bin/bash
 
-OUTPUT='/usr/local/bin/backup-borg'
-curl $1 > $OUTPUT
+BACKUP_FILE='/usr/local/bin/backup-borg'
+wget "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/backup-borg.bash" -o $BACKUP_FILE
 
-PATTERN="$2" perl -pi.bak -e "s/export BORG_REPO=''/export BORG_REPO='\$ENV{PATTERN}'/" $OUTPUT
-PATTERN="$3" perl -pi.bak -e "s/export BORG_PASSPHRASE=''/export BORG_PASSPHRASE='\$ENV{PATTERN}'/" $OUTPUT
-PATTERN="$4" perl -pi.bak -e "s/export BORG_RSH=''/export BORG_RSH='\$ENV{PATTERN}'/" $OUTPUT
+PATTERN="$1" perl -pi.bak -e "s/export BORG_REPO=''/export BORG_REPO='\$ENV{PATTERN}'/" $BACKUP_FILE
+PATTERN="$2" perl -pi.bak -e "s/export BORG_PASSPHRASE=''/export BORG_PASSPHRASE='\$ENV{PATTERN}'/" $BACKUP_FILE
+PATTERN="$3" perl -pi.bak -e "s/export BORG_RSH=''/export BORG_RSH='\$ENV{PATTERN}'/" $BACKUP_FILE

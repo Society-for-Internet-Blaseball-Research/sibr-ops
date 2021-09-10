@@ -134,11 +134,12 @@ backup() {
             esac
         fi
         
-        if [[ $BACKUP_VOLUMES == "true" ]]; then
+        if [[ "$BACKUP_VOLUMES" = "true" ]]; then
             info "Starting backup of volumes of $CONTAINER_ID into $ARCHIVE_NAME"
             MOUNT_EXCLUSION=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.exclude\"])
 
-            MOUNTS=(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+            MOUNTS=()
+            MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
             if [[ -n $MOUNT_EXCLUSION ]]; then
                 /usr/local/bin/borg create \
@@ -184,7 +185,7 @@ backup() {
             --keep-weekly $KEEP_WEEKLY \
             --keep-monthly $KEEP_MONTHLY \
             --keep-yearly $KEEP_YEARLY
-    done 3< <(docker ps --format '{{.ID}}' --filter "label=dev.sibr.borg.database")
+    done 3< <(docker ps --format '{{.ID}}')
 }
 
 # Backup to our local repo
