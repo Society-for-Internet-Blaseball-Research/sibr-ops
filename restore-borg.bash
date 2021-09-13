@@ -1,19 +1,12 @@
 #!/bin/bash
 
-HOSTNAME=$(hostname)
-
-KEEP_DAILY=7
-KEEP_WEEKLY=4
-KEEP_MONTHLY=6
-KEEP_YEARLY=3
-
-COMPRESSION_LEVEL="zstd,11"
-RCLONE_ACCOUNT="b2"
-RCLONE_REPO="sibr-dual-backup"
-
 export BORG_PASSPHRASE=''
-export BORG_RSH=''
 export BORG_REPO=''
+export BORG_RSH=''
+
+# some helpers and error handling:
+info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
+trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
 showHelp() {
 # `cat << EOF` This means that cat should stop reading when EOF is detected
@@ -81,92 +74,109 @@ do
 shift
 done
 
+if [[ -z "${HOST// }" ]]; then
+    echo "No host provided"
+    exit 1
+fi
+
+if [[ -z "${CONTAINER_NAME// }" ]]; then
+    echo "No container name provided"
+    exit 1
+fi
+
+STARTING_DIR=$(pwd)
+
 while read -r -u 3 CONTAINER_ID ; do
-    # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
     DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
     DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
 
     ARCHIVE_NAME=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.name\"])
     DATABASE_TYPE=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.database\"])
-    
-    echo "Restoring $DOCKER_NAME mounts"
+    BACKUP_VOLUMES=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
 
-    while read -r -u 4 MOUNT_SOURCE ; do
-        echo "Mount: $(echo $MOUNT_SOURCE | jq .Source) -> $(echo $MOUNT_SOURCE | jq .Destination)"
-    done 4< <(echo $DOCKER_DATA | jq -c .Mounts[])
+    if [[ "$BACKUP_VOLUMES" = "true" ]]; then        
+        #Step 0. Figure out our stack name -- com.docker.stack.namespace
+        STACK_NAME=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"com.docker.stack.namespace\"])
 
-    BORG_USER=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
-    BORG_PASS=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
-    BORG_DB=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
+        echo "Restoring $DOCKER_NAME ($STACK_NAME) mounts"
 
-    # case $DATABASE_TYPE in
-    #     postgres|postgresql|psql)
-    #         info "Starting backup of $CONTAINER_ID into $ARCHIVE_NAME via pg_dump"
+        # Step 1. Get the Borg archive
+        VOLUMES_ARCHIVE=$(borg list -P $HOST-$ARCHIVE_NAME-volumes --short --last 1)
 
-    #         docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create                         \
-    #             --verbose                           \
-    #             --filter AME                        \
-    #             --list                              \
-    #             --stats                             \
-    #             --show-rc                           \
-    #             --compression $COMPRESSION_LEVEL    \
-    #             --exclude-caches                    \
-    #             ::"{hostname}-$ARCHIVE_NAME-{now}" -
-    #     ;;
+        if [[ -n $VOLUMES_ARCHIVE ]]; then
+            while read -r -u 4 MOUNT_DATA ; do
+                MOUNT_SOURCE=$(echo $MOUNT_DATA | jq -r .Source)
+                DIR=$(echo $MOUNT_SOURCE | rev | cut -d'/' -f2- | rev)  # Trim the file/dir name, in case we're dealing with a bind mount + file
 
-    #     mariadb|mysql)
-    #         info "Starting backup of $CONTAINER_ID into $ARCHIVE_NAME via mysqldump"
+                # Step 2. Navigate to the source
+                cd $DIR
 
-    #         docker exec -u 0 -i $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS $BORG_DB | /usr/local/bin/borg create \
-    #             --verbose                           \
-    #             --filter AME                        \
-    #             --list                              \
-    #             --stats                             \
-    #             --show-rc                           \
-    #             --compression $COMPRESSION_LEVEL    \
-    #             --exclude-caches                    \
-    #             ::"{hostname}-$ARCHIVE_NAME-{now}" -
-    #     ;;
+                # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
+                COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
 
-    #     *)
-    #         info "Failing to backup $CONTAINER_ID into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
-    #     ;;
+                borg extract --progress --list $BORG_ARCHIVE_NAME --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
 
-    # esac
+            done 4< <(echo $DOCKER_DATA | jq -c .Mounts[])
+        else
+            info "No volume archive found"
+        fi
+    fi
 
-    # if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
-    #     info "Uploading $ARCHIVE_NAME backups with rclone"
+    if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+        BORG_USER=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
+        BORG_PASS=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
+        BORG_DB=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
 
-    #     rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
-    # else
-    #     info "Not using rclone"
-    # fi
+        DATABASE_ARCHIVE=$(borg list -P $HOST-$ARCHIVE_NAME-$DATABASE_TYPE --short --last 1)
+        if [[ -n $DATABASE_ARCHIVE ]]; then
+            case $DATABASE_TYPE in
+                postgres|postgresql|psql)
+                    # Check if we have enough space to use a tmp file
+                    DATABASE_ARCHIVE_SIZE=$(borg info --json ::$DATABASE_ARCHIVE | jq .archives[].stats.original_size)
+                    FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | jq -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
 
-    # info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+                    CREATE_TMP=0
 
-    # /usr/local/bin/borg prune \
-    #     --list \
-    #     --prefix "{hostname}-$ARCHIVE_NAME-" \
-    #     --show-rc \
-    #     --keep-daily $KEEP_DAILY \
-    #     --keep-weekly $KEEP_WEEKLY \
-    #     --keep-monthly $KEEP_MONTHLY \
-    #     --keep-yearly $KEEP_YEARLY
-done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME")
+                    if [[ $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
+                        TMP_AVAILABLE=$(( $FREE_SPACE - $DATABASE_ARCHIVE_SIZE ))
 
-# # First up, we need to get two archives --
-# # One for the mounts, etc
-# BORG_MOUNTS_NAME=$(borg list -P $HOST-core --short --last 1)
+                        if [[ $TMP_AVAILABLE -gt 25000000000 ]]; then
+                            CREATE_TMP=1;
+                        fi
+                    fi
 
-# # And one for the database
-# BORG_DATABASE_NAME=$(borg list -P $HOST-$ARCHIVE_NAME --short --last 1)
+                    if [[ $CREATE_TMP -eq 1 ]]; then
+                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore + tmpfile"
 
-# # To restore our mounts, we need to query docker
+                        borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 -i $CONTAINER_ID dd of=/tmp/pg_archive
 
-# borg extract --dry-run --list $BORG_ARCHIVE_NAME
+                        docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID sh -c "pg_restore --username=$BORG_USER --dbname=$BORG_DB --clean --verbose --jobs=$(nproc --all) /tmp/pg_archive && rm /tmp/pg_archive"
+                    else
+                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
 
-echo $BORG_ARCHIVE_NAME
+                        borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore --clean --verbose --username=$BORG_USER --dbname=$BORG_DB
+                    fi
+                ;;
+
+                mariadb|mysql)
+                    info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
+
+                    borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 $CONTAINER_ID mysql -u $BORG_USER --password=$BORG_PASS $BORG_DB
+                ;;
+
+                *)
+                    info "Failing to restore $ARCHIVE_NAME into $DOCKER_NAME - unknown database type $DATABASE_TYPE"
+                ;;
+
+            esac
+        else
+            info "No database archive found"
+        fi
+    fi
+done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME") # Alternatively, we could use  --filter "label=dev.sibr.borg.name=$CCONTAINER_NAME"
 
 unset BORG_REPO
 unset BORG_RSH
 unset BORG_PASSPHRASE
+
+cd $STARTING_DIR

@@ -93,15 +93,15 @@ backup() {
         if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
             # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
 
-            BORG_USER=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
-            BORG_PASS=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
-            BORG_DB=$(echo $DOCKER_DATA | jq '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
+            BORG_USER=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
+            BORG_PASS=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
+            BORG_DB=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
 
             case $DATABASE_TYPE in
                 postgres|postgresql|psql)
                     info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
 
-                    docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create                         \
+                    docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create                         \
                         --verbose                           \
                         --filter AME                        \
                         --list                              \
@@ -115,7 +115,7 @@ backup() {
                 mariadb|mysql)
                     info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
 
-                    docker exec -u 0 -i $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS $BORG_DB | /usr/local/bin/borg create \
+                    docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | /usr/local/bin/borg create \
                         --verbose                           \
                         --filter AME                        \
                         --list                              \
