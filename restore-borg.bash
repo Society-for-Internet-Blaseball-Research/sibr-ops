@@ -84,9 +84,21 @@ if [[ -z "${CONTAINER_NAME// }" ]]; then
     exit 1
 fi
 
-STARTING_DIR=$(pwd)
+echo "Do you wish to restore the following containers? "
+
+docker ps --filter "name=$CONTAINER_NAME"
+
+select yn in "Yes" "No"; do
+    case $yn in
+        Yes ) break;;
+        No ) exit;;
+    esac
+done
+
 
 while read -r -u 3 CONTAINER_ID ; do
+    STARTING_DIR=$(pwd)
+
     DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
     DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
 
@@ -138,9 +150,9 @@ while read -r -u 3 CONTAINER_ID ; do
                     CREATE_TMP=0
 
                     if [[ $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
-                        TMP_AVAILABLE=$(( $FREE_SPACE - $DATABASE_ARCHIVE_SIZE ))
+                        TMP_AVAILABLE=$(( $FREE_SPACE - ($DATABASE_ARCHIVE_SIZE * 1.25) ))
 
-                        if [[ $TMP_AVAILABLE -gt 25000000000 ]]; then
+                        if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
                             CREATE_TMP=1;
                         fi
                     fi
@@ -173,10 +185,10 @@ while read -r -u 3 CONTAINER_ID ; do
             info "No database archive found"
         fi
     fi
+
+    cd $STARTING_DIR
 done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME") # Alternatively, we could use  --filter "label=dev.sibr.borg.name=$CCONTAINER_NAME"
 
 unset BORG_REPO
 unset BORG_RSH
 unset BORG_PASSPHRASE
-
-cd $STARTING_DIR
