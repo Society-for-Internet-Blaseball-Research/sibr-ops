@@ -1,78 +1,46 @@
 #!/bin/bash
+#
+# m4_ignore(
+echo "WARNING - This is just a script template, not the script (yet) - pass it to 'argbash' to fix this." >&2
+exit 11  
+#)
+# ARG_OPTIONAL_SINGLE(host,H,Override the default host for this script)
+# ARG_POSITIONAL_SINGLE(container,Filter containers by name)
+# ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
+# ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
+# ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
+# ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
+# ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
+# ARG_HELP([Restore a volume and/or database from a borg backup])
+# ARG_USE_PROGRAM([borg], [BORG], [Borg needs to be installed!],[Borg program location])
+# ARG_VERBOSE([v])
+# ARGBASH_GO
 
-export BORG_PASSPHRASE=''
-export BORG_REPO=''
-export BORG_RSH=''
+# [ <-- needed because of Argbash
 
 # some helpers and error handling:
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
 trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
-showHelp() {
-# `cat << EOF` This means that cat should stop reading when EOF is detected
-cat << EOF  
-Usage: restore-borg -v <espo-version> [-hrV]
-Restore a volume and/or database from a borg backup
+export BORG_REPO
+export BORG_PASSPHRASE
+export BORG_RSH
 
--h,     --help                  Display help
+# If no envvar is provided, we should provide our default
+test -z "${BORG_REPO// }" && BORG_REPO="%BORG_REPO%"
+test -z "${BORG_PASSPHRASE// }" && BORG_PASSPHRASE="%BORG_PASSPHRASE%"
+test -z "${BORG_RSH// }" && BORG_RSH="%BORG_RSH%"
 
--v,     --espo-version          Set and Download specific version of EspoCRM
+# If argument is present, override the environmental variable, even if it is present
+test "${_arg_borg_repo// }" && BORG_REPO="$_arg_borg_repo"
+test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
+test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
 
--r,     --rebuild               Rebuild php vendor directory using composer and compiled css using grunt
-
--V,     --verbose               Run script in verbose mode. Will print out each step of execution.
-
-EOF
-# EOF is found above and hence cat command stops reading. This is equivalent to echo but much neater when printing out.
-}
-
-
-HOST=""
-CONTAINER_NAME=""
-VERBOSE=0
+HOST="$_arg_host"
+CONTAINER_NAME="$_arg_container"
+VERBOSE=$_arg_verbose
 DRY_RUN=0
-
-# $@ is all command line parameters passed to the script.
-# -o is for short options like -v
-# -l is for long options with double dash like --version
-# the comma separates different long options
-# -a is for long options with single dash like -version
-options=$(getopt -l "help,host:,container_name:,verbose,dry_run" -o "hv" -- "$@")
-
-# set --:
-# If no arguments follow this option, then the positional parameters are unset. Otherwise, the positional parameters 
-# are set to the arguments, even if some of them begin with a ‘-’.
-eval set -- "$options"
-
-while true 
-do
-    case $1 in
-        -h|--help) 
-            showHelp
-            exit 0
-            ;;
-        -v|--verbose)
-            VERBOSE=1
-            set -xv  # Set xtrace and verbose mode.
-            ;;
-        --host)
-            shift
-            HOST=$1
-            ;;
-        --container_name)
-            shift
-            CONTAINER_NAME=$1
-            ;;
-        --dry-run)
-            shift
-            DRY_RUN=1
-            ;;
-        --)
-            shift
-            break;;
-    esac
-shift
-done
+SHOW_PROGRESS=0
 
 if [[ -z "${HOST// }" ]]; then
     echo "No host provided"
@@ -84,7 +52,15 @@ if [[ -z "${CONTAINER_NAME// }" ]]; then
     exit 1
 fi
 
-echo "Do you wish to restore the following containers? "
+if [[ "$_arg_dry_run" = "on" ]]; then
+    DRY_RUN=1
+fi
+
+if [[ "$_arg_progress" = "on" ]]; then
+    SHOW_PROGRESS=1
+fi
+
+echo "Do you wish to restore the following containers?"
 
 docker ps --filter "name=$CONTAINER_NAME"
 
@@ -94,6 +70,20 @@ select yn in "Yes" "No"; do
         No ) exit;;
     esac
 done
+
+BORG_EXTRACT=()
+
+if [[ $VERBOSE -eq 1 ]]; then
+    BORG_EXTRACT+="--verbose"
+fi
+
+if [[ $DRY_RUN -eq 1 ]]; then
+    BORG_EXTRACT+="--dry-run"
+fi
+
+if [[ $SHOW_PROGRESS -eq 1 ]]; then
+    BORG_EXTRACT+="--progress"
+fi
 
 
 while read -r -u 3 CONTAINER_ID ; do
@@ -126,7 +116,7 @@ while read -r -u 3 CONTAINER_ID ; do
                 # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
                 COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
 
-                borg extract --progress --list $BORG_ARCHIVE_NAME --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
+                borg extract "${BORG_EXTRACT[@]}" --list $BORG_ARCHIVE_NAME --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
 
             done 4< <(echo $DOCKER_DATA | jq -c .Mounts[])
         else
@@ -160,20 +150,20 @@ while read -r -u 3 CONTAINER_ID ; do
                     if [[ $CREATE_TMP -eq 1 ]]; then
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore + tmpfile"
 
-                        borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 -i $CONTAINER_ID dd of=/tmp/pg_archive
+                        borg extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | docker exec -u 0 -i $CONTAINER_ID dd of=/tmp/pg_archive
 
-                        docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID sh -c "pg_restore --username=$BORG_USER --dbname=$BORG_DB --clean --verbose --jobs=$(nproc --all) /tmp/pg_archive && rm /tmp/pg_archive"
+                        docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID sh -c "pg_restore --username=$BORG_USER --dbname=$BORG_DB --clean --verbose --jobs=$(nproc --all) /tmp/pg_archive ; rm /tmp/pg_archive"
                     else
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
 
-                        borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore --clean --verbose --username=$BORG_USER --dbname=$BORG_DB
+                        borg extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | docker exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore --clean --verbose --username=$BORG_USER --dbname=$BORG_DB
                     fi
                 ;;
 
                 mariadb|mysql)
                     info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
 
-                    borg extract --stdout ::$DATABASE_ARCHIVE | docker exec -u 0 $CONTAINER_ID mysql -u $BORG_USER --password=$BORG_PASS $BORG_DB
+                    borg extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | docker exec -u 0 $CONTAINER_ID mysql -u $BORG_USER --password=$BORG_PASS $BORG_DB
                 ;;
 
                 *)
@@ -192,3 +182,5 @@ done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME") # Altern
 unset BORG_REPO
 unset BORG_RSH
 unset BORG_PASSPHRASE
+
+# ] <-- needed because of Argbash

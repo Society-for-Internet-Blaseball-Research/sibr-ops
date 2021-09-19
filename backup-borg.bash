@@ -1,109 +1,81 @@
 #!/bin/bash
+#
+# m4_ignore(
+echo "WARNING - This is just a script template, not the script (yet) - pass it to 'argbash' to fix this." >&2
+exit 11  
+#)
+# ARG_OPTIONAL_SINGLE(host,H,[Override the default host for this script])
+# ARG_OPTIONAL_SINGLE(container,,[Filter containers to backup])
+# ARG_OPTIONAL_SINGLE(compression,C,[Compression level for the backups],[zstd,11])
+# ARG_OPTIONAL_SINGLE(rclone-account,,[Account to use for backing up with rclone],[b2])
+# ARG_OPTIONAL_SINGLE(rclone-bucket,,[Bucket to use for backing up with rclone],[sibr-dual-backup])
+# ARG_OPTIONAL_SINGLE(transfers,,[Number of file transfers to run in parallel],[32])
+# ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
+# ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
+# ARG_OPTIONAL_BOOLEAN(list,,[List output from Borg])
+# ARG_OPTIONAL_BOOLEAN(stats,s,[Show stats from Borg])
+# ARG_OPTIONAL_BOOLEAN(skip-core,,[Skip core backup])
+# ARG_OPTIONAL_BOOLEAN(skip-docker,,[Skip docker backup])
+# ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
+# ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
+# ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
+# ARG_HELP([Restore a volume and/or database from a borg backup])
+# ARG_USE_PROGRAM([borg], [BORG], [Borg needs to be installed!],[Borg program location])
+# ARG_USE_PROGRAM([rclone], [RCLONE],,[rclone program location])
+# ARG_VERBOSE([v])
+# ARGBASH_GO
+
+# [ <-- needed because of Argbash
 
 # Each backup we perform has three important stages -- perform, upload, then prune.
 # We perform a few backups, one under {hostname}-core for the core data, and then one for each database we need to back up
 
-export BORG_PASSPHRASE=''
-export BORG_RSH=''
-export BORG_REPO=''
+# some helpers and error handling:
+info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
+trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
-showHelp() {
-# `cat << EOF` This means that cat should stop reading when EOF is detected
-cat << EOF  
-Usage: backup-borg  [--skip_core] [--skip_docker]
-                    [--borg_repo <repository>] [--borg_passphrase <passphrase>] [--borg_rsh <remote shell>] 
-                    [--host <hostname>] [--compression <compression level>] 
-                    [--container_name <container name>] [--verbose] [--dry_run] [-hv]
-Back up volumes and databases
+export BORG_REPO
+export BORG_PASSPHRASE
+export BORG_RSH
 
--h,     --help                  Display help
+# If no envvar is provided, we should provide our default
+test -z "${BORG_REPO// }" && BORG_REPO="%BORG_REPO%"
+test -z "${BORG_PASSPHRASE// }" && BORG_PASSPHRASE="%BORG_PASSPHRASE%"
+test -z "${BORG_RSH// }" && BORG_RSH="%BORG_RSH%"
 
--v,     --verbose               Run scripts in verbose mode.
+# If argument is present, override the environmental variable, even if it is present
+test "${_arg_borg_repo// }" && BORG_REPO="$_arg_borg_repo"
+test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
+test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
 
-EOF
-# EOF is found above and hence cat command stops reading. This is equivalent to echo but much neater when printing out.
-}
-
-# $@ is all command line parameters passed to the script.
-# -o is for short options like -v
-# -l is for long options with double dash like --version
-# the comma separates different long options
-# -a is for long options with single dash like -version
-options=$(getopt -l "help,,skip_core,skip_docker,borg_repo:,borg_passphrase:,borg_rsh:,host:,hostname:,compression:,container_name:,verbose,dry_run" -o "hv" -- "$@")
-
-# set --:
-# If no arguments follow this option, then the positional parameters are unset. Otherwise, the positional parameters 
-# are set to the arguments, even if some of them begin with a ‘-’.
-eval set -- "$options"
-
-HOSTNAME=$(hostname)
-CONTAINER_NAME=''
+HOST="${_arg_host:-$(hostname)}"
+CONTAINER_NAME="$_arg_container"
 
 KEEP_DAILY=7
 KEEP_WEEKLY=4
 KEEP_MONTHLY=6
 KEEP_YEARLY=3
 
-COMPRESSION_LEVEL="zstd,11"
-RCLONE_ACCOUNT="b2"
-RCLONE_REPO="sibr-dual-backup"
+COMPRESSION_LEVEL="$_arg_compression"
+RCLONE_ACCOUNT="$_arg_rclone_account"
+RCLONE_BUCKET="$_arg_rclone_bucket"
 
-VERBOSE=0
+VERBOSE=$_arg_verbose
 DRY_RUN=0
 SKIP_CORE=0
 SKIP_DOCKER=0
 
-while true 
-do
-    case $1 in
-        -h|--help) 
-            showHelp
-            exit 0
-            ;;
-        -v|--verbose)
-            VERBOSE=1
-            set -xv  # Set xtrace and verbose mode.
-            ;;
-        --skip_core)
-            SKIP_CORE=1
-            ;;
-        --skip_docker)
-            SKIP_DOCKER=1
-            ;;
-        --borg_repo)
-            shift
-            export BORG_REPO=$1
-            ;;
-        --borg_passphrase)
-            shift
-            export BORG_PASSPHRASE=$1
-            ;;
-        --borg_rsh)
-            shift
-            export BORG_RSH=$1
-            ;;
-        --host|--hostname)
-            shift
-            HOSTNAME=$1
-            ;;
-        --compression)
-            shift
-            COMPRESSION_LEVEL=$1
-            ;;
-        --container_name)
-            shift
-            CONTAINER_NAME=$1
-            ;;
-        --dry-run)
-            shift
-            DRY_RUN=1
-            ;;
-        --)
-            shift
-            break;;
-    esac
-shift
-done
+if [[ "$_arg_dry_run" = "on" ]]; then
+    DRY_RUN=1
+fi
+
+if [[ "$_arg_skip_core" = "on" ]]; then
+    SKIP_CORE=1
+fi
+
+if [[ "$_arg_skip_docker" = "on" ]]; then
+    SKIP_DOCKER=1
+fi
 
 echo "Do you wish to back up the following containers?"
 
@@ -120,14 +92,36 @@ done
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
 trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
-ARGS=()
+BORG_CREATE=()
+BORG_PRUNE=()
+RCLONE_UPLOAD=()
 
 if [[ $VERBOSE -eq 1 ]]; then
-    ARGS+="--verbose"
+    BORG_CREATE+="--verbose"
+    BORG_PRUNE+="--verbose"
+    RCLONE_UPLOAD+="--verbose"
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
-    ARGS+="--dry-run"
+    BORG_CREATE+="--dry-run"
+    BORG_PRUNE+="--dry-run"
+    RCLONE_UPLOAD+="--dry-run"
+fi
+
+if [[ "$_arg_progress" = "on" ]]; then
+    BORG_CREATE+="--progress"
+    BORG_PRUNE+="--progress"
+    RCLONE_UPLOAD+="--progress"
+fi
+
+if [[ "$_arg_list" = "on" ]]; then
+    BORG_CREATE+="--list"
+    BORG_PRUNE+="--list"
+fi
+
+if [[ "$_arg_stats" = "on" ]]; then
+    BORG_CREATE+="--stats"
+    BORG_PRUNE+="--stats"
 fi
 
 if [[ $SKIP_CORE -eq 0 ]]; then
@@ -136,10 +130,8 @@ if [[ $SKIP_CORE -eq 0 ]]; then
     # Backup the most important directories into an archive named after
     # the machine this script is currently running on:
 
-    /usr/local/bin/borg create "${args[@]}" \
+    "$BORG" create "${BORG_CREATE[@]}" \
         --filter AME \
-        --list \
-        --stats \
         --show-rc \
         --compression $COMPRESSION_LEVEL \
         --exclude-caches \
@@ -162,15 +154,15 @@ if [[ $SKIP_CORE -eq 0 ]]; then
         /etc \
         /storage
 
-    core_backup_exit=$?
+    if [[ $DRY_RUN -eq 0 ]]; then
+        if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
+            info "Uploading backups with rclone"
 
-    if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
-        info "Uploading backups with rclone"
-
-        # TODO: Add rclone uploading
-        rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
-    else
-        info "Not using rclone"
+            # TODO: Add rclone uploading
+            "$RCLONE" copy "${RCLONE_UPLOAD[@]}" --transfers $_arg_transfers $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_BUCKET/$HOSTNAME"
+        else
+            info "Not using rclone"
+        fi
     fi
 
     info "Pruning core backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
@@ -180,16 +172,13 @@ if [[ $SKIP_CORE -eq 0 ]]; then
     # limit prune's operation to this machine's archives and not apply to
     # other machines' archives also:
 
-    /usr/local/bin/borg prune "${args[@]}" \
-        --list \
+    "$BORG" prune "${BORG_PRUNE[@]}" \
         --prefix '{hostname}-core-' \
         --show-rc \
         --keep-daily $KEEP_DAILY \
         --keep-weekly $KEEP_WEEKLY \
         --keep-monthly $KEEP_MONTHLY \
         --keep-yearly $KEEP_YEARLY
-
-    core_prune_exit=$?
 else
     info "Skipping core..."
 fi
@@ -197,7 +186,6 @@ fi
 # Now we need to back up the individual databases
 
 if [[ $SKIP_DOCKER -eq 0 ]]; then
-
     while read -r -u 3 CONTAINER_ID ; do
         DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
         DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
@@ -217,10 +205,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                 postgres|postgresql|psql)
                     info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
 
-                    docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
+                    docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
                         --filter AME                        \
-                        --list                              \
-                        --stats                             \
                         --show-rc                           \
                         --compression $COMPRESSION_LEVEL    \
                         --exclude-caches                    \
@@ -230,10 +216,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                 mariadb|mysql)
                     info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
 
-                    docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
+                    docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
                         --filter AME                        \
-                        --list                              \
-                        --stats                             \
                         --show-rc                           \
                         --compression $COMPRESSION_LEVEL    \
                         --exclude-caches                    \
@@ -255,10 +239,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
             # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
             if [[ -n $MOUNT_EXCLUSION ]]; then
-                /usr/local/bin/borg create "${args[@]}" \
+                "$BORG" create "${BORG_CREATE[@]}" \
                     --filter AME \
-                    --list \
-                    --stats \
                     --show-rc \
                     --compression $COMPRESSION_LEVEL \
                     --exclude-caches \
@@ -266,10 +248,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                     ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
                     $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
             else
-                /usr/local/bin/borg create "${args[@]}" \
+                "$BORG" create "${BORG_CREATE[@]}" \
                     --filter AME \
-                    --list \
-                    --stats \
                     --show-rc \
                     --compression $COMPRESSION_LEVEL \
                     --exclude-caches \
@@ -278,19 +258,20 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
             fi
         fi
 
-        if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
-            info "Uploading $ARCHIVE_NAME backups with rclone"
+        if [[ $DRY_RUN -eq 0 ]]; then
+            if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
+                info "Uploading $ARCHIVE_NAME backups with rclone"
 
-            rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
-        else
-            info "Not using rclone"
+                "$RCLONE" copy "${RCLONE_UPLOAD[@]}" --transfers $_arg_transfers $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_BUCKET/$HOSTNAME"
+            else
+                info "Not using rclone"
+            fi
         fi
 
         info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
 
         if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
-            /usr/local/bin/borg prune "${args[@]}" \
-                --list \
+            "$BORG" prune "${BORG_PRUNE[@]}" \
                 --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
                 --show-rc \
                 --keep-daily $KEEP_DAILY \
@@ -300,8 +281,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         fi
 
         if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-            /usr/local/bin/borg prune "${args[@]}" \
-                --list \
+            "$BORG" prune "${BORG_PRUNE[@]}" \
                 --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
                 --show-rc \
                 --keep-daily $KEEP_DAILY \
