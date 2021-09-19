@@ -39,14 +39,14 @@ export BORG_PASSPHRASE
 export BORG_RSH
 
 # If no envvar is provided, we should provide our default
-test -z "${BORG_REPO// }" && BORG_REPO="%BORG_REPO%"
-test -z "${BORG_PASSPHRASE// }" && BORG_PASSPHRASE="%BORG_PASSPHRASE%"
-test -z "${BORG_RSH// }" && BORG_RSH="%BORG_RSH%"
+test -z "${BORG_REPO// }" && BORG_REPO='%BORG_REPO%'
+test -z "${BORG_PASSPHRASE// }" && BORG_PASSPHRASE='%BORG_PASSPHRASE%'
+test -z "${BORG_RSH// }" && BORG_RSH='%BORG_RSH%'
 
 # If argument is present, override the environmental variable, even if it is present
-test "${_arg_borg_repo// }" && BORG_REPO="$_arg_borg_repo"
-test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
-test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
+test "${_arg_borg_repo// }" && BORG_REPO=$_arg_borg_repo
+test "${_arg_borg_pass// }" && BORG_PASSPHRASE=$_arg_borg_pass
+test "${_arg_borg_rsh// }" && BORG_RSH=$_arg_borg_rsh
 
 HOST="${_arg_host:-$(hostname)}"
 CONTAINER_NAME="$_arg_container"
