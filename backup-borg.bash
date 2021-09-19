@@ -297,3 +297,5 @@ fi
 unset BORG_REPO
 unset BORG_RSH
 unset BORG_PASSPHRASE
+
+# ] <-- needed because of Argbash

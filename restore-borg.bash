@@ -36,7 +36,7 @@ test "${_arg_borg_repo// }" && BORG_REPO="$_arg_borg_repo"
 test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
 test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
 
-HOST="$_arg_host"
+HOST="${_arg_host:-$(hostname)}"
 CONTAINER_NAME="$_arg_container"
 VERBOSE=$_arg_verbose
 DRY_RUN=0
