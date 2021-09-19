@@ -16,6 +16,7 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(stats,s,[Show stats from Borg])
 # ARG_OPTIONAL_BOOLEAN(skip-core,,[Skip core backup])
 # ARG_OPTIONAL_BOOLEAN(skip-docker,,[Skip docker backup])
+# ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to backup without input])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -81,12 +82,14 @@ echo "Do you wish to back up the following containers?"
 
 docker ps  --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME"
 
-select yn in "Yes" "No"; do
-    case $yn in
-        Yes ) break;;
-        No ) exit;;
-    esac
-done
+if [[ "$_arg_accept" = "off" ]]; then
+    select yn in "Yes" "No"; do
+        case $yn in
+            Yes ) break;;
+            No ) exit;;
+        esac
+    done
+fi
 
 # some helpers and error handling:
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
