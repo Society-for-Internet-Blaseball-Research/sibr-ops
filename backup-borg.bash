@@ -10,8 +10,9 @@ export BORG_REPO=''
 showHelp() {
 # `cat << EOF` This means that cat should stop reading when EOF is detected
 cat << EOF  
-Usage: backup-borg  [--help] [--borg_repo <repository>] [--borg_passphrase <passphrase>] 
-                    [--borg_rsh <remote shell>] [--host <hostname>] [--compression <compression level>] 
+Usage: backup-borg  [--skip_core] [--skip_docker]
+                    [--borg_repo <repository>] [--borg_passphrase <passphrase>] [--borg_rsh <remote shell>] 
+                    [--host <hostname>] [--compression <compression level>] 
                     [--container_name <container name>] [--verbose] [--dry_run] [-hv]
 Back up volumes and databases
 
@@ -28,7 +29,7 @@ EOF
 # -l is for long options with double dash like --version
 # the comma separates different long options
 # -a is for long options with single dash like -version
-options=$(getopt -l "help,borg_repo:,borg_passphrase:,borg_rsh:,host:,hostname:,compression:,container_name:,verbose,dry_run" -o "hv" -- "$@")
+options=$(getopt -l "help,,skip_core,skip_docker,borg_repo:,borg_passphrase:,borg_rsh:,host:,hostname:,compression:,container_name:,verbose,dry_run" -o "hv" -- "$@")
 
 # set --:
 # If no arguments follow this option, then the positional parameters are unset. Otherwise, the positional parameters 
@@ -49,6 +50,8 @@ RCLONE_REPO="sibr-dual-backup"
 
 VERBOSE=0
 DRY_RUN=0
+SKIP_CORE=0
+SKIP_DOCKER=0
 
 while true 
 do
@@ -60,6 +63,12 @@ do
         -v|--verbose)
             VERBOSE=1
             set -xv  # Set xtrace and verbose mode.
+            ;;
+        --skip_core)
+            SKIP_CORE=1
+            ;;
+        --skip_docker)
+            SKIP_DOCKER=1
             ;;
         --borg_repo)
             shift
@@ -111,11 +120,6 @@ done
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
 trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
-info "Starting core backup for $HOSTNAME"
-
-# Backup the most important directories into an archive named after
-# the machine this script is currently running on:
-
 ARGS=()
 
 if [[ $VERBOSE -eq 1 ]]; then
@@ -126,175 +130,189 @@ if [[ $DRY_RUN -eq 1 ]]; then
     ARGS+="--dry-run"
 fi
 
-/usr/local/bin/borg create "${args[@]}" \
-    --filter AME \
-    --list \
-    --stats \
-    --show-rc \
-    --compression $COMPRESSION_LEVEL \
-    --exclude-caches \
-    --exclude '/var/lib/docker/volumes/' \
-    --exclude '/srv/docker/mediawiki*/db_data' \
-    --exclude '/srv/docker/mediawiki*/db_backups' \
-    --exclude '/srv/docker/matomo/db' \
-    --exclude '/srv/docker/councilwiki/db_data' \
-    --exclude '/srv/docker/glolfwiki/db_data' \
-    --exclude '/srv/docker/datablase/nginx/cache' \
-    --exclude '/var/lib/docker/volumes/netdata_netdatacache' \
-    --exclude '/var/cache' \
-    --exclude '/home/*/.cache/*' \
-    --exclude '/var/tmp/*' \
-    --exclude '/storage/restic' \
-    --exclude '/storage/borg*' \
-    ::'{hostname}-core-{now}' \
-    /var \
-    /srv \
-    /etc \
-    /storage
+if [[ $SKIP_CORE -eq 0 ]]; then
+    info "Starting core backup for $HOSTNAME"
 
-core_backup_exit=$?
+    # Backup the most important directories into an archive named after
+    # the machine this script is currently running on:
 
-if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
-    info "Uploading backups with rclone"
+    /usr/local/bin/borg create "${args[@]}" \
+        --filter AME \
+        --list \
+        --stats \
+        --show-rc \
+        --compression $COMPRESSION_LEVEL \
+        --exclude-caches \
+        --exclude '/var/lib/docker/volumes/' \
+        --exclude '/srv/docker/mediawiki*/db_data' \
+        --exclude '/srv/docker/mediawiki*/db_backups' \
+        --exclude '/srv/docker/matomo/db' \
+        --exclude '/srv/docker/councilwiki/db_data' \
+        --exclude '/srv/docker/glolfwiki/db_data' \
+        --exclude '/srv/docker/datablase/nginx/cache' \
+        --exclude '/var/lib/docker/volumes/netdata_netdatacache' \
+        --exclude '/var/cache' \
+        --exclude '/home/*/.cache/*' \
+        --exclude '/var/tmp/*' \
+        --exclude '/storage/restic' \
+        --exclude '/storage/borg*' \
+        ::'{hostname}-core-{now}' \
+        /var \
+        /srv \
+        /etc \
+        /storage
 
-    # TODO: Add rclone uploading
-    rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
-else
-    info "Not using rclone"
-fi
-
-info "Pruning core backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
-
-# Use the `prune` subcommand to maintain x daily, y weekly and z monthly
-# archives of THIS machine. The '{hostname}-core-' prefix is very important to
-# limit prune's operation to this machine's archives and not apply to
-# other machines' archives also:
-
-/usr/local/bin/borg prune "${args[@]}" \
-    --list \
-    --prefix '{hostname}-core-' \
-    --show-rc \
-    --keep-daily $KEEP_DAILY \
-    --keep-weekly $KEEP_WEEKLY \
-    --keep-monthly $KEEP_MONTHLY \
-    --keep-yearly $KEEP_YEARLY
-
-core_prune_exit=$?
-
-# Now we need to back up the individual databases
-
-while read -r -u 3 CONTAINER_ID ; do
-    DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
-    DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
-
-    ARCHIVE_NAME=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.name\"])
-    DATABASE_TYPE=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.database\"])
-    BACKUP_VOLUMES=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
-
-    if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
-        # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
-
-        BORG_USER=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
-        BORG_PASS=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
-        BORG_DB=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
-
-        case $DATABASE_TYPE in
-            postgres|postgresql|psql)
-                info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
-
-                docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
-                    --filter AME                        \
-                    --list                              \
-                    --stats                             \
-                    --show-rc                           \
-                    --compression $COMPRESSION_LEVEL    \
-                    --exclude-caches                    \
-                    ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
-            ;;
-
-            mariadb|mysql)
-                info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
-
-                docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
-                    --filter AME                        \
-                    --list                              \
-                    --stats                             \
-                    --show-rc                           \
-                    --compression $COMPRESSION_LEVEL    \
-                    --exclude-caches                    \
-                    ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
-            ;;
-
-            *)
-                info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
-            ;;
-
-        esac
-    fi
-    
-    if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-        info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
-        MOUNT_EXCLUSION=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.exclude\"])
-
-        # MOUNTS=()
-        # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-
-        if [[ -n $MOUNT_EXCLUSION ]]; then
-            /usr/local/bin/borg create "${args[@]}" \
-                --filter AME \
-                --list \
-                --stats \
-                --show-rc \
-                --compression $COMPRESSION_LEVEL \
-                --exclude-caches \
-                --exclude "$MOUNT_EXCLUSION" \
-                ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-        else
-            /usr/local/bin/borg create "${args[@]}" \
-                --filter AME \
-                --list \
-                --stats \
-                --show-rc \
-                --compression $COMPRESSION_LEVEL \
-                --exclude-caches \
-                ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-        fi
-    fi
+    core_backup_exit=$?
 
     if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
-        info "Uploading $ARCHIVE_NAME backups with rclone"
+        info "Uploading backups with rclone"
 
+        # TODO: Add rclone uploading
         rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
     else
         info "Not using rclone"
     fi
 
-    info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+    info "Pruning core backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
 
-    if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
-        /usr/local/bin/borg prune "${args[@]}" \
-            --list \
-            --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
-            --show-rc \
-            --keep-daily $KEEP_DAILY \
-            --keep-weekly $KEEP_WEEKLY \
-            --keep-monthly $KEEP_MONTHLY \
-            --keep-yearly $KEEP_YEARLY
-    fi
+    # Use the `prune` subcommand to maintain x daily, y weekly and z monthly
+    # archives of THIS machine. The '{hostname}-core-' prefix is very important to
+    # limit prune's operation to this machine's archives and not apply to
+    # other machines' archives also:
 
-    if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-        /usr/local/bin/borg prune "${args[@]}" \
-            --list \
-            --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
-            --show-rc \
-            --keep-daily $KEEP_DAILY \
-            --keep-weekly $KEEP_WEEKLY \
-            --keep-monthly $KEEP_MONTHLY \
-            --keep-yearly $KEEP_YEARLY
-    fi
-done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME" --filter "label=dev.sibr.borg.name")
+    /usr/local/bin/borg prune "${args[@]}" \
+        --list \
+        --prefix '{hostname}-core-' \
+        --show-rc \
+        --keep-daily $KEEP_DAILY \
+        --keep-weekly $KEEP_WEEKLY \
+        --keep-monthly $KEEP_MONTHLY \
+        --keep-yearly $KEEP_YEARLY
+
+    core_prune_exit=$?
+else
+    info "Skipping core..."
+fi
+
+# Now we need to back up the individual databases
+
+if [[ $SKIP_DOCKER -eq 0 ]]; then
+
+    while read -r -u 3 CONTAINER_ID ; do
+        DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
+        DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
+
+        ARCHIVE_NAME=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.name\"])
+        DATABASE_TYPE=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.database\"])
+        BACKUP_VOLUMES=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
+
+        if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+            # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
+
+            BORG_USER=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
+            BORG_PASS=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
+            BORG_DB=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
+
+            case $DATABASE_TYPE in
+                postgres|postgresql|psql)
+                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
+
+                    docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
+                        --filter AME                        \
+                        --list                              \
+                        --stats                             \
+                        --show-rc                           \
+                        --compression $COMPRESSION_LEVEL    \
+                        --exclude-caches                    \
+                        ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                ;;
+
+                mariadb|mysql)
+                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
+
+                    docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | /usr/local/bin/borg create "${args[@]}" \
+                        --filter AME                        \
+                        --list                              \
+                        --stats                             \
+                        --show-rc                           \
+                        --compression $COMPRESSION_LEVEL    \
+                        --exclude-caches                    \
+                        ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                ;;
+
+                *)
+                    info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
+                ;;
+
+            esac
+        fi
+        
+        if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+            info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
+            MOUNT_EXCLUSION=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.exclude\"])
+
+            # MOUNTS=()
+            # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+
+            if [[ -n $MOUNT_EXCLUSION ]]; then
+                /usr/local/bin/borg create "${args[@]}" \
+                    --filter AME \
+                    --list \
+                    --stats \
+                    --show-rc \
+                    --compression $COMPRESSION_LEVEL \
+                    --exclude-caches \
+                    --exclude "$MOUNT_EXCLUSION" \
+                    ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
+                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+            else
+                /usr/local/bin/borg create "${args[@]}" \
+                    --filter AME \
+                    --list \
+                    --stats \
+                    --show-rc \
+                    --compression $COMPRESSION_LEVEL \
+                    --exclude-caches \
+                    ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
+                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+            fi
+        fi
+
+        if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_REPO ]]; then
+            info "Uploading $ARCHIVE_NAME backups with rclone"
+
+            rclone copy --progress --transfers 32 $BORG_REPO "$RCLONE_ACCOUNT:/$RCLONE_REPO/$HOSTNAME"
+        else
+            info "Not using rclone"
+        fi
+
+        info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+
+        if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+            /usr/local/bin/borg prune "${args[@]}" \
+                --list \
+                --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
+                --show-rc \
+                --keep-daily $KEEP_DAILY \
+                --keep-weekly $KEEP_WEEKLY \
+                --keep-monthly $KEEP_MONTHLY \
+                --keep-yearly $KEEP_YEARLY
+        fi
+
+        if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+            /usr/local/bin/borg prune "${args[@]}" \
+                --list \
+                --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
+                --show-rc \
+                --keep-daily $KEEP_DAILY \
+                --keep-weekly $KEEP_WEEKLY \
+                --keep-monthly $KEEP_MONTHLY \
+                --keep-yearly $KEEP_YEARLY
+        fi
+    done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME" --filter "label=dev.sibr.borg.name")
+else
+    info "Skipping docker..."
+fi
 
 unset BORG_REPO
 unset BORG_RSH
