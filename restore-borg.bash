@@ -74,15 +74,15 @@ done
 BORG_EXTRACT=()
 
 if [[ $VERBOSE -eq 1 ]]; then
-    BORG_EXTRACT+="--verbose"
+    BORG_EXTRACT+="--verbose "
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
-    BORG_EXTRACT+="--dry-run"
+    BORG_EXTRACT+="--dry-run "
 fi
 
 if [[ $SHOW_PROGRESS -eq 1 ]]; then
-    BORG_EXTRACT+="--progress"
+    BORG_EXTRACT+="--progress "
 fi
 
 

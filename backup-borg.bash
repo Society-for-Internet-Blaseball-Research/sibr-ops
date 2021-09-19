@@ -97,31 +97,31 @@ BORG_PRUNE=()
 RCLONE_UPLOAD=()
 
 if [[ $VERBOSE -eq 1 ]]; then
-    BORG_CREATE+="--verbose"
-    BORG_PRUNE+="--verbose"
-    RCLONE_UPLOAD+="--verbose"
+    BORG_CREATE+="--verbose "
+    BORG_PRUNE+="--verbose "
+    RCLONE_UPLOAD+="--verbose "
 fi
 
 if [[ $DRY_RUN -eq 1 ]]; then
-    BORG_CREATE+="--dry-run"
-    BORG_PRUNE+="--dry-run"
-    RCLONE_UPLOAD+="--dry-run"
+    BORG_CREATE+="--dry-run "
+    BORG_PRUNE+="--dry-run "
+    RCLONE_UPLOAD+="--dry-run "
 fi
 
 if [[ "$_arg_progress" = "on" ]]; then
-    BORG_CREATE+="--progress"
-    BORG_PRUNE+="--progress"
-    RCLONE_UPLOAD+="--progress"
+    BORG_CREATE+="--progress "
+    BORG_PRUNE+="--progress "
+    RCLONE_UPLOAD+="--progress "
 fi
 
 if [[ "$_arg_list" = "on" ]]; then
-    BORG_CREATE+="--list"
-    BORG_PRUNE+="--list"
+    BORG_CREATE+="--list "
+    BORG_PRUNE+="--list "
 fi
 
 if [[ "$_arg_stats" = "on" ]]; then
-    BORG_CREATE+="--stats"
-    BORG_PRUNE+="--stats"
+    BORG_CREATE+="--stats "
+    BORG_PRUNE+="--stats "
 fi
 
 if [[ $SKIP_CORE -eq 0 ]]; then
