@@ -4,8 +4,8 @@ BACKUP_FILE='/usr/local/bin/backup-borg'
 RESTORE_FILE='/usr/local/bin/restore-borg'
 UPDATE_FILE='/usr/local/bin/update-borg-scripts'
 
-curl "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/backup-borg.m4" > $BACKUP_FILE
-curl "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/restore-borg.m4" > $RESTORE_FILE
+curl "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/backup-borg.bash" > $BACKUP_FILE
+curl "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/restore-borg.bash" > $RESTORE_FILE
 curl "https://raw.githubusercontent.com/Society-for-Internet-Blaseball-Research/sibr-ops/master/update-borg-scripts.bash" > $UPDATE_FILE
 
 BORG_REPO="$1"
