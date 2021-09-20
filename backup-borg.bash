@@ -31,10 +31,6 @@ exit 11
 # Each backup we perform has three important stages -- perform, upload, then prune.
 # We perform a few backups, one under {hostname}-core for the core data, and then one for each database we need to back up
 
-# some helpers and error handling:
-info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
-trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
-
 export BORG_REPO
 export BORG_PASSPHRASE
 export BORG_RSH
@@ -78,11 +74,11 @@ if [[ "$_arg_skip_docker" = "on" ]]; then
     SKIP_DOCKER=1
 fi
 
-echo "Do you wish to back up the following containers?"
-
 docker ps  --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME"
 
 if [[ "$_arg_accept" = "off" ]]; then
+    echo "Do you wish to back up these containers?"
+
     select yn in "Yes" "No"; do
         case $yn in
             Yes ) break;;
