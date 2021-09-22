@@ -14,6 +14,9 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(skip-mounts,,[Skip mount restoration])
 # ARG_OPTIONAL_BOOLEAN(skip-databases,,[Skip database restoration])
 # ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to restore without input])
+# ARG_OPTIONAL_BOOLEAN(force-tmp,,[Force database restoration to use a temporary file])
+# ARG_OPTIONAL_BOOLEAN(skip-tmp,,[Force database restoration to skip using a temporary file])
+# ARG_OPTIONAL_BOOLEAN(keep-tmp,,[Keep the temporary file after restoring from it])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -24,6 +27,10 @@ exit 11
 # ARGBASH_GO
 
 # [ <-- needed because of Argbash
+
+# some helpers and error handling:
+info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
+trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 
 export BORG_REPO
 export BORG_PASSPHRASE
@@ -54,6 +61,7 @@ VERBOSE=$_arg_verbose
 DRY_RUN=0
 SKIP_MOUNTS=0
 SKIP_DATABASES=0
+KEEP_TMP=0
 
 if [[ "$_arg_dry_run" = "on" ]]; then
     DRY_RUN=1
@@ -65,6 +73,10 @@ fi
 
 if [[ "$_arg_skip_databases" = "on" ]]; then
     SKIP_DATABASES=1
+fi
+
+if [[ "$_arg_keep_tmp" = "on" ]]; then
+    KEEP_TMP=1
 fi
 
 "$DOCKER" ps  --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME"
@@ -165,8 +177,10 @@ while read -r -u 3 CONTAINER_ID ; do
 
                     CREATE_TMP=0
 
-                    if [[ $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
-                        TMP_AVAILABLE=$(( $FREE_SPACE - ($DATABASE_ARCHIVE_SIZE * 1.25) ))
+                    if [[ "$_arg_force_tmp" = "on" ]]; then
+                        CREATE_TMP=1
+                    elif [[ "$_arg_skip_tmp" = "off" && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
+                        TMP_AVAILABLE=$(( $FREE_SPACE - $DATABASE_ARCHIVE_SIZE - ($DATABASE_ARCHIVE_SIZE / 2) )) #Bash doesn't support floating point maths
 
                         if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
                             CREATE_TMP=1;
@@ -174,12 +188,26 @@ while read -r -u 3 CONTAINER_ID ; do
                     fi
 
                     if [[ $CREATE_TMP -eq 1 ]]; then
-                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore + tmpfile"
+                        ARCHIVE_DIR="/tmp/sibr"
+                        ARCHIVE_LOCATION="$ARCHIVE_DIR/pg_restore-$ARCHIVE_NAME"
+                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore + $ARCHIVE_LOCATION"
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i $CONTAINER_ID dd of=/tmp/pg_archive
+                        "$DOCKER" exec -u 0 $CONTAINER_ID mkdir -p "$ARCHIVE_DIR"
 
-                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore --username=$BORG_USER --dbname=$BORG_DB "${PG_RESTORE[@]}" --jobs=$(nproc --all) /tmp/pg_archive
-                        "$DOCKER" exec -u 0 rm /tmp/pg_archive
+                        TMP_SIZE="$DOCKER" exec -u 0 $CONTAINER_ID du -bP "$ARCHIVE_LOCATION" | cut -f1
+                        TMP_EXISTS=0
+                        if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+                            if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
+                                TMP_EXISTS=1
+                            fi
+                        fi
+
+                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i $CONTAINER_ID dd "of=$ARCHIVE_LOCATION"
+
+                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID xargs bash -xc 'pg_restore --username=$BORG_USER --dbname=$BORG_DB "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"'
+                        wait
+                        
+                        "$DOCKER" exec -u 0 $CONTAINER_ID rm /tmp/pg_archive
                     else
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
 
