@@ -194,7 +194,7 @@ while read -r -u 3 CONTAINER_ID ; do
 
                         "$DOCKER" exec -u 0 $CONTAINER_ID mkdir -p "$ARCHIVE_DIR"
 
-                        TMP_SIZE="$DOCKER" exec -u 0 $CONTAINER_ID du -bP "$ARCHIVE_LOCATION" | cut -f1
+                        TMP_SIZE=$("$DOCKER" exec -u 0 $CONTAINER_ID du -bP "$ARCHIVE_LOCATION" | cut -f1)
                         TMP_EXISTS=0
                         if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
                             if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
@@ -204,12 +204,19 @@ while read -r -u 3 CONTAINER_ID ; do
 
                         "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i $CONTAINER_ID dd "of=$ARCHIVE_LOCATION"
 
-                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID xargs bash -xc 'pg_restore --username=$BORG_USER --dbname=$BORG_DB "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"'
-                        wait
-                        
-                        "$DOCKER" exec -u 0 $CONTAINER_ID rm /tmp/pg_archive
+                        # https://stackoverflow.com/a/34271562
+                        # printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
+
+                        "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB $PG_RESTORE_ARGS" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
+
+                        if [[ $KEEP_TMP -eq 0 ]]; then
+                            "$DOCKER" exec -u 0 $CONTAINER_ID rm "$ARCHIVE_LOCATION"
+                        fi
                     else
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
+
+                        # https://stackoverflow.com/a/34271562
+                        # printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
                         "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username=$BORG_USER --dbname=$BORG_DB
                     fi
@@ -218,7 +225,7 @@ while read -r -u 3 CONTAINER_ID ; do
                 mariadb|mysql)
                     info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
 
-                   "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 $CONTAINER_ID mysql "${MYSQL[@]}" -u $BORG_USER --password=$BORG_PASS $BORG_DB
+                   "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -i -u 0 $CONTAINER_ID mysql "${MYSQL[@]}" -u $BORG_USER --password=$BORG_PASS $BORG_DB
                 ;;
 
                 *)
