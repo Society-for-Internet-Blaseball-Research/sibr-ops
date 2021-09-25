@@ -167,17 +167,17 @@ if [[ -z "$_arg_pgbackrest_type" ]]; then
     PGBACKREST_BACKUP+=("--type=$_arg_pgbackrest_type")
 fi
 
-docker_env {
+docker_env() {
     printf -v JQ_FILTER '.Config.Env[]|select(startswith("%q"))' "$1"
     echo "$DOCKER_DATA" | jq -r $JQ_FILTER | grep -P "^$1=" | sed 's/[^=]*=//'
 }
 
-docker_label {
+docker_label() {
     printf -v JQ_FILTER '.Config.Labels["%q"]' "$1"
     echo "$DOCKER_DATA" | jq -r $JQ_FILTER
 }
 
-docker_mount {
+docker_mount() {
     printf -v JQ_FILTER '.Mounts[]|select(.Destination|startswith("%q")).Source' "$1"
     echo "$DOCKER_DATA" | jq -r $JQ_FILTER
 }
@@ -341,7 +341,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         
         if [[ "$BACKUP_VOLUMES" = "true" ]]; then
             info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
-            MOUNT_EXCLUSION=$(docker_labels 'dev.sibr.borg.volumes.exclude')
+            MOUNT_EXCLUSION=$(docker_label 'dev.sibr.borg.volumes.exclude')
 
             # MOUNTS=()
             # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
