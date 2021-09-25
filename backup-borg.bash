@@ -10,6 +10,7 @@ exit 11
 # ARG_OPTIONAL_SINGLE(rclone-account,,[Account to use for backing up with rclone],[b2])
 # ARG_OPTIONAL_SINGLE(rclone-bucket,,[Bucket to use for backing up with rclone],[sibr-dual-backup])
 # ARG_OPTIONAL_SINGLE(transfers,,[Number of file transfers to run in parallel],[32])
+# ARG_OPTIONAL_SINGLE(pgbackrest-type,,[Type of backup to perform with pgBackRest])
 # ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
 # ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
 # ARG_OPTIONAL_BOOLEAN(list,,[List output from Borg])
@@ -94,6 +95,7 @@ trap 'echo $( date ) Backup interrupted >&2; exit 2' INT TERM
 BORG_CREATE=()
 BORG_PRUNE=()
 RCLONE_UPLOAD=()
+PGBACKREST_BACKUP=()
 
 if [[ $VERBOSE -eq 1 ]]; then
     BORG_CREATE+=("--verbose")
@@ -122,6 +124,25 @@ if [[ "$_arg_stats" = "on" ]]; then
     BORG_CREATE+=("--stats")
     BORG_PRUNE+=("--stats")
 fi
+
+if [[ -z "$_arg_pgbackrest_type" ]]; then
+    PGBACKREST_BACKUP+=("--type=$_arg_pgbackrest_type")
+fi
+
+docker_env {
+    printf -v JQ_FILTER '.Config.Env[]|select(startswith("%q"))' "$1"
+    echo "$DOCKER_DATA" | jq -r $JQ_FILTER | grep -P "^$1=" | sed 's/[^=]*=//'
+}
+
+docker_label {
+    printf -v JQ_FILTER '.Config.Labels["%q"]' "$1"
+    echo "$DOCKER_DATA" | jq -r $JQ_FILTER
+}
+
+docker_mount {
+    printf -v JQ_FILTER '.Mounts[]|select(.Destination|startswith("%q")).Source' "$1"
+    echo "$DOCKER_DATA" | jq -r $JQ_FILTER
+}
 
 if [[ $SKIP_CORE -eq 0 ]]; then
     info "Starting core backup for $HOSTNAME"
@@ -189,38 +210,88 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         DOCKER_DATA=$(docker inspect $CONTAINER_ID | jq '.[]')
         DOCKER_NAME=$(echo $DOCKER_DATA | jq -r .Name | cut -c2-)
 
-        ARCHIVE_NAME=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.name\"])
-        DATABASE_TYPE=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.database\"])
-        BACKUP_VOLUMES=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
+        ARCHIVE_NAME=$(docker_label 'dev.sibr.borg.name')
+        DATABASE_TYPE=$(docker_label 'dev.sibr.borg.database')
+        BACKUP_VOLUMES=$(docker_label 'dev.sibr.borg.volumes.backup')
 
         if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
             # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
 
-            BORG_USER=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
-            BORG_PASS=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
-            BORG_DB=$(echo $DOCKER_DATA | jq -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
-
             case $DATABASE_TYPE in
                 postgres|postgresql|psql)
-                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
+                    BORG_USER=$(docker_env 'BORG_USER')
+                    BORG_PASS=$(docker_env 'BORG_PASSWORD')
+                    BORG_DB=$(docker_env 'BORG_DB')
 
-                    docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
-                        --filter AME                        \
-                        --show-rc                           \
-                        --compression $COMPRESSION_LEVEL    \
-                        --exclude-caches                    \
-                        ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                    if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
+                        info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
+
+                        docker exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_dump -Z0 -Fc --username=$BORG_USER $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
+                            --filter AME                        \
+                            --show-rc                           \
+                            --compression $COMPRESSION_LEVEL    \
+                            --exclude-caches                    \
+                            ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                    else
+                        info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
+                    fi
+                ;;
+
+                pgbackrest|backrest)
+                    # pgBackRest doesn't quite work in the same way as our other dumps; we want to force a backup, then do a borg backup of that volume
+                    BORG_STANZA=$(docker_env 'BORG_STANZA')
+                    BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+                    BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
+
+                    if [[ -n "$BORG_STANZA" ]]; then
+                        info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pgbackrest"
+
+                        if docker exec -u 999 -i $CONTAINER_ID pgbackrest "--stanza=$BORG_STANZA" --log-level-console=info "${PGBACKREST_BACKUP[@]}" backup; then
+                            "$BORG" create "${BORG_CREATE[@]}" \
+                                --filter AME \
+                                --show-rc \
+                                --compression $COMPRESSION_LEVEL \
+                                --exclude-caches \
+                                ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" \
+                                "$BACKREST_MOUNT"
+                        fi
+                    else
+                        info "Failed to backup $DOCKER_NAME - missing BORG_STANZA"
+                    fi
+
+                     "$BORG" create "${BORG_CREATE[@]}" \
+                        --filter AME \
+                        --show-rc \
+                        --compression $COMPRESSION_LEVEL \
+                        --exclude-caches \
+                        ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
+                        $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+                    
+                    # "$BORG" create "${BORG_CREATE[@]}" \
+                    #     --filter AME                        \
+                    #     --show-rc                           \
+                    #     --compression $COMPRESSION_LEVEL    \
+                    #     --exclude-caches                    \
+                    #     ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
                 ;;
 
                 mariadb|mysql)
-                    info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
+                    BORG_USER=$(docker_env 'BORG_USER')
+                    BORG_PASS=$(docker_env 'BORG_PASSWORD')
+                    BORG_DB=$(docker_env 'BORG_DB')
 
-                    docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
-                        --filter AME                        \
-                        --show-rc                           \
-                        --compression $COMPRESSION_LEVEL    \
-                        --exclude-caches                    \
-                        ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                    if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
+                        info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
+
+                        docker exec -u 0 $CONTAINER_ID mysqldump -u $BORG_USER --password=$BORG_PASS --no-tablespaces $BORG_DB | "$BORG" create "${BORG_CREATE[@]}" \
+                            --filter AME                        \
+                            --show-rc                           \
+                            --compression $COMPRESSION_LEVEL    \
+                            --exclude-caches                    \
+                            ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                    else
+                        info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
+                    fi
                 ;;
 
                 *)
@@ -232,13 +303,22 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         
         if [[ "$BACKUP_VOLUMES" = "true" ]]; then
             info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
-            MOUNT_EXCLUSION=$(echo $DOCKER_DATA | jq -r .Config.Labels[\"dev.sibr.borg.volumes.exclude\"])
+            MOUNT_EXCLUSION=$(docker_labels 'dev.sibr.borg.volumes.exclude')
 
             # MOUNTS=()
             # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
+            local ARGS=("${BORG_CREATE[@]}")
+            if [[ "$DATABASE_TYPE" ~= "pgbackrest|backrest" ]]; then
+                info "Excluding pgBackRest mount"
+                BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+                BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
+
+                ARGS+=("--exclude", "$BACKREST_MOUNT")
+            fi
+
             if [[ -n $MOUNT_EXCLUSION ]]; then
-                "$BORG" create "${BORG_CREATE[@]}" \
+                "$BORG" create "${ARGS[@]}" \
                     --filter AME \
                     --show-rc \
                     --compression $COMPRESSION_LEVEL \
@@ -247,7 +327,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                     ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
                     $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
             else
-                "$BORG" create "${BORG_CREATE[@]}" \
+                "$BORG" create "${ARGS[@]}" \
                     --filter AME \
                     --show-rc \
                     --compression $COMPRESSION_LEVEL \
