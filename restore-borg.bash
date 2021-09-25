@@ -14,6 +14,8 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(skip-mounts,,[Skip mount restoration])
 # ARG_OPTIONAL_BOOLEAN(skip-databases,,[Skip database restoration])
 # ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to restore without input])
+# ARG_OPTIONAL_BOOLEAN(wait-for-lock,,[If a lock is present, wait for other process to shut down])
+# ARG_OPTIONAL_BOOLEAN(break-lock,,[If a lock is present, break it regardless of if the other process is active])
 # ARG_OPTIONAL_BOOLEAN(force-tmp,,[Force database restoration to use a temporary file])
 # ARG_OPTIONAL_BOOLEAN(skip-tmp,,[Force database restoration to skip using a temporary file])
 # ARG_OPTIONAL_BOOLEAN(keep-tmp,,[Keep the temporary file after restoring from it])
@@ -27,6 +29,31 @@ exit 11
 # ARGBASH_GO
 
 # [ <-- needed because of Argbash
+
+LOCKFILE="/tmp/dev.sibr.borg.lock"
+
+if [[ -f $LOCKFILE ]]; then
+    if [[ "$arg_break_lock" = "on" ]]; then
+        echo "Breaking lockfile"
+        rm $LOCKFILE
+    else
+        PID=$(cat $LOCKFILE)
+        if [[ -f "/proc/$PID/stat" ]]; then
+            if [[ $_arg_wait_for_lock = "off" ]]; then
+                echo "Borg is currently in use, waiting on $PID"
+                exit 1
+            fi
+
+            wait $PID
+        fi
+
+        echo "Breaking stale lockfile"
+        rm $LOCKFILE
+    fi
+fi
+
+echo $$ > $LOCKFILE
+trap "rm $LOCKFILE" EXIT
 
 # some helpers and error handling:
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }

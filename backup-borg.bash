@@ -11,6 +11,7 @@ exit 11
 # ARG_OPTIONAL_SINGLE(rclone-bucket,,[Bucket to use for backing up with rclone],[sibr-dual-backup])
 # ARG_OPTIONAL_SINGLE(transfers,,[Number of file transfers to run in parallel],[32])
 # ARG_OPTIONAL_SINGLE(pgbackrest-type,,[Type of backup to perform with pgBackRest])
+# ARG_OPTIONAL_SINGLE(database-type,,[Filter containers to backup by database type])
 # ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
 # ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
 # ARG_OPTIONAL_BOOLEAN(list,,[List output from Borg])
@@ -18,6 +19,8 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(skip-core,,[Skip core backup])
 # ARG_OPTIONAL_BOOLEAN(skip-docker,,[Skip docker backup])
 # ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to backup without input])
+# ARG_OPTIONAL_BOOLEAN(wait-for-lock,,[If a lock is present, wait for other process to shut down])
+# ARG_OPTIONAL_BOOLEAN(break-lock,,[If a lock is present, break it regardless of if the other process is active])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -31,6 +34,33 @@ exit 11
 
 # Each backup we perform has three important stages -- perform, upload, then prune.
 # We perform a few backups, one under {hostname}-core for the core data, and then one for each database we need to back up
+
+# First up, check for a lockfile
+
+LOCKFILE="/tmp/dev.sibr.borg.lock"
+
+if [[ -f $LOCKFILE ]]; then
+    if [[ "$arg_break_lock" = "on" ]]; then
+        echo "Breaking lockfile"
+        rm $LOCKFILE
+    else
+        PID=$(cat $LOCKFILE)
+        if [[ -f "/proc/$PID/stat" ]]; then
+            if [[ $_arg_wait_for_lock = "off" ]]; then
+                echo "Borg is currently in use, waiting on $PID"
+                exit 1
+            fi
+
+            wait $PID
+        fi
+
+        echo "Breaking stale lockfile"
+        rm $LOCKFILE
+    fi
+fi
+
+echo $$ > $LOCKFILE
+trap "rm $LOCKFILE" EXIT
 
 export BORG_REPO
 export BORG_PASSPHRASE
@@ -47,7 +77,6 @@ test "${_arg_borg_pass// }" && BORG_PASSPHRASE=$_arg_borg_pass
 test "${_arg_borg_rsh// }" && BORG_RSH=$_arg_borg_rsh
 
 HOST="${_arg_host:-$(hostname)}"
-CONTAINER_NAME="$_arg_container"
 
 KEEP_DAILY=7
 KEEP_WEEKLY=4
@@ -75,7 +104,16 @@ if [[ "$_arg_skip_docker" = "on" ]]; then
     SKIP_DOCKER=1
 fi
 
-docker ps  --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME"
+FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
+if [[ -n "$_arg_container" ]]; then
+    FILTER_ARGS+=("--filter" "name=$_arg_container")
+fi
+
+if [[ -n "$_arg_database_type" ]]; then
+    FILTER_ARGS+=("--filter" "label=dev.sibr.borg.database=$_arg_database_type")
+fi
+
+docker ps "${FILTER_ARGS[@]}"
 
 if [[ "$_arg_accept" = "off" ]]; then
     echo "Do you wish to back up these containers?"
@@ -239,14 +277,14 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
 
                 pgbackrest|backrest)
                     # pgBackRest doesn't quite work in the same way as our other dumps; we want to force a backup, then do a borg backup of that volume
-                    BORG_STANZA=$(docker_env 'BORG_STANZA')
+                    BACKREST_STANZA=$(docker_env 'BACKREST_STANZA')
                     BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
                     BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 
-                    if [[ -n "$BORG_STANZA" ]]; then
+                    if [[ -n "$BACKREST_STANZA" ]]; then
                         info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pgbackrest"
 
-                        if docker exec -u 999 -i $CONTAINER_ID pgbackrest "--stanza=$BORG_STANZA" --log-level-console=info "${PGBACKREST_BACKUP[@]}" backup; then
+                        if docker exec -u 999 -i $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --log-level-console=info "${PGBACKREST_BACKUP[@]}" backup; then
                             "$BORG" create "${BORG_CREATE[@]}" \
                                 --filter AME \
                                 --show-rc \
@@ -256,7 +294,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                                 "$BACKREST_MOUNT"
                         fi
                     else
-                        info "Failed to backup $DOCKER_NAME - missing BORG_STANZA"
+                        info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA"
                     fi
 
                      "$BORG" create "${BORG_CREATE[@]}" \
@@ -309,32 +347,27 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
             # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
             local ARGS=("${BORG_CREATE[@]}")
-            if [[ "$DATABASE_TYPE" ~= "pgbackrest|backrest" ]]; then
+            if [[ "$DATABASE_TYPE" =~ "pgbackrest|backrest" ]]; then
                 info "Excluding pgBackRest mount"
                 BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
                 BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 
-                ARGS+=("--exclude", "$BACKREST_MOUNT")
+                ARGS+=("--exclude" "$BACKREST_MOUNT")
             fi
 
+            echo "Mount Exclusion: $MOUNT_EXCLUSION"
+
             if [[ -n $MOUNT_EXCLUSION ]]; then
-                "$BORG" create "${ARGS[@]}" \
-                    --filter AME \
-                    --show-rc \
-                    --compression $COMPRESSION_LEVEL \
-                    --exclude-caches \
-                    --exclude "$MOUNT_EXCLUSION" \
-                    ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-            else
-                "$BORG" create "${ARGS[@]}" \
-                    --filter AME \
-                    --show-rc \
-                    --compression $COMPRESSION_LEVEL \
-                    --exclude-caches \
-                    ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                    $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
+                ARGS+=("--exclude" "$MOUNT_EXCLUSION")
             fi
+
+            "$BORG" create "${ARGS[@]}" \
+                --filter AME \
+                --show-rc \
+                --compression $COMPRESSION_LEVEL \
+                --exclude-caches \
+                ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
+                $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
         fi
 
         if [[ $DRY_RUN -eq 0 ]]; then
@@ -368,7 +401,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                 --keep-monthly $KEEP_MONTHLY \
                 --keep-yearly $KEEP_YEARLY
         fi
-    done 3< <(docker ps --format '{{.ID}}' --filter "name=$CONTAINER_NAME" --filter "label=dev.sibr.borg.name")
+    done 3< <(docker ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
 else
     info "Skipping docker..."
 fi
