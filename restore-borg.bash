@@ -252,10 +252,19 @@ while read -r -u 3 CONTAINER_ID ; do
             if [[ "$_arg_accept" = "off" ]]; then
                 echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
 
-                select yn in "Yes" "No"; do
+                select yn in "Yes" "No" "Exit"; do
                     case $yn in
-                        Yes ) RESTORE_TYPE="$FORCED_TYPE";;
-                        No ) ;;
+                        Yes ) 
+                            RESTORE_TYPE="$FORCED_TYPE"
+                            break
+                            ;;
+                        No ) 
+                            break
+                            ;;
+
+                        Exit )
+                            exit
+                            ;;
                     esac
                 done
             else
@@ -288,11 +297,11 @@ while read -r -u 3 CONTAINER_ID ; do
                     if [[ $CREATE_TMP -eq 1 ]]; then
                         ARCHIVE_DIR="/tmp/sibr"
                         ARCHIVE_LOCATION="$ARCHIVE_DIR/pg_restore-$ARCHIVE_NAME"
-                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore + $ARCHIVE_LOCATION"
+                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME ($CONTAINER_ID) via pg_restore + $ARCHIVE_LOCATION"
 
-                        "$DOCKER" exec -u 0 $CONTAINER_ID mkdir -p "$ARCHIVE_DIR"
+                        "$DOCKER" exec -u 0 "$CONTAINER_ID" mkdir -p "$ARCHIVE_DIR"
 
-                        TMP_SIZE=$("$DOCKER" exec -u 0 $CONTAINER_ID du -bP "$ARCHIVE_LOCATION" | cut -f1)
+                        TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
                         TMP_EXISTS=0
                         if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
                             if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
@@ -300,15 +309,15 @@ while read -r -u 3 CONTAINER_ID ; do
                             fi
                         fi
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i $CONTAINER_ID dd "of=$ARCHIVE_LOCATION"
+                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
 
                         # https://stackoverflow.com/a/34271562
                         # printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-                        "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
+                        "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
 
                         if [[ $KEEP_TMP -eq 0 ]]; then
-                            "$DOCKER" exec -u 0 $CONTAINER_ID rm "$ARCHIVE_LOCATION"
+                            "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
                         fi
                     else
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
