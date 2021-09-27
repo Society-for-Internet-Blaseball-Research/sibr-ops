@@ -172,10 +172,10 @@ docker_mount() {
 }
 
 get_dependents() {
-    while read -r -u 10 CONTAINER_ID ; do
-        local NAME=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
+    while read -r -u 10 DEP_CONTAINER_ID ; do
+        local NAME=$("$DOCKER" inspect $DEP_CONTAINER_ID | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
 
-        DEPENDENT_CONTAINERS+=("$CONTAINER_ID")
+        DEPENDENT_CONTAINERS+=("$DEP_CONTAINER_ID")
         if [[ -n $NAME && "$NAME" != "null" ]]; then
             get_dependents "$NAME"
         fi
@@ -197,7 +197,6 @@ resume_dependents() {
 }
 
 while read -r -u 3 CONTAINER_ID ; do
-    CONTAINER_ID="$CONTAINER_ID"
     STARTING_DIR=$(pwd)
 
     DOCKER_DATA=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" '.[]')
