@@ -53,7 +53,6 @@ if [[ -f $LOCKFILE ]]; then
 fi
 
 echo $$ > $LOCKFILE
-trap "rm $LOCKFILE" EXIT
 
 # some helpers and error handling:
 info() { printf "\n%s %s\n\n" "$(date)" "$*" >&2; }
@@ -74,11 +73,6 @@ test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
 test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
 HOST="${_arg_host:-$(hostname)}"
 CONTAINER_NAME="$_arg_container"
-
-KEEP_DAILY=7
-KEEP_WEEKLY=4
-KEEP_MONTHLY=6
-KEEP_YEARLY=3
 
 COMPRESSION_LEVEL="$_arg_compression"
 RCLONE_ACCOUNT="$_arg_rclone_account"
@@ -106,7 +100,16 @@ if [[ "$_arg_keep_tmp" = "on" ]]; then
     KEEP_TMP=1
 fi
 
-"$DOCKER" ps  --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME"
+FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
+if [[ -n "$_arg_container" ]]; then
+    FILTER_ARGS+=("--filter" "name=$_arg_container")
+fi
+
+if [[ -n "$_arg_database_type" ]]; then
+    FILTER_ARGS+=("--filter" "label=dev.sibr.borg.database=$_arg_database_type")
+fi
+
+"$DOCKER" ps "${FILTER_ARGS[@]}"
 
 if [[ "$_arg_accept" = "off" ]]; then
     echo "Do you wish to restore these containers?"
@@ -151,19 +154,67 @@ if [[ "$_arg_clean_databases" = "on" ]]; then
 fi
 
 
+docker_env() {
+    printf -v JQ_FILTER '.Config.Env[]|select(startswith("%q"))' "$1"
+    echo "$DOCKER_DATA" | "$JQ" -r $JQ_FILTER | grep -P "^$1=" | sed 's/[^=]*=//'
+}
+
+docker_label() {
+    printf -v JQ_FILTER '.Config.Labels["%q"]' "$1"
+    echo "$DOCKER_DATA" | "$JQ" -r $JQ_FILTER
+}
+
+docker_mount() {
+    printf -v JQ_FILTER '.Mounts[]|select(.Destination|startswith("%q")).Source' "$1"
+    echo "$DOCKER_DATA" | "$JQ" -r $JQ_FILTER
+}
+
+get_dependents() {
+    while read -r -u 10 CONTAINER_ID ; do
+        local NAME=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" -r '.[].Config.Labels[\"dev.sibr.borg.name\"]')
+
+        DEPENDENT_CONTAINERS+=("$CONTAINER_ID")
+        if [[ -n $NAME && "$NAME" != "null" ]]; then
+            get_dependents "$NAME"
+        fi
+    done 10< <("$DOCKER" ps --format '{{.ID}}' --filter "label=dev.sibr.borg.depends_on=$1")
+}
+
+suspend_dependents() {
+    if [[ ${#DEPENDENT_CONTAINERS[@]} -gt 0 ]]; then
+        info "Suspending dependent containers"
+        "$DOCKER" pause "${DEPENDENT_CONTAINERS[@]}"
+    fi
+}
+
+resume_dependents() {
+    if [[ ${#DEPENDENT_CONTAINERS[@]} -gt 0 ]]; then
+        info "Resuming dependent containers"
+        "$DOCKER" unpause "${DEPENDENT_CONTAINERS[@]}"
+    fi
+}
+
 while read -r -u 3 CONTAINER_ID ; do
     STARTING_DIR=$(pwd)
 
     DOCKER_DATA=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" '.[]')
     DOCKER_NAME=$(echo $DOCKER_DATA | "$JQ" -r .Name | cut -c2-)
 
-    ARCHIVE_NAME=$(echo $DOCKER_DATA | "$JQ" -r .Config.Labels[\"dev.sibr.borg.name\"])
-    DATABASE_TYPE=$(echo $DOCKER_DATA | "$JQ" -r .Config.Labels[\"dev.sibr.borg.database\"])
-    BACKUP_VOLUMES=$(echo $DOCKER_DATA | "$JQ" -r .Config.Labels[\"dev.sibr.borg.volumes.backup\"])
+    ARCHIVE_NAME=$(docker_label 'dev.sibr.borg.name')
+    DATABASE_TYPE=$(docker_label 'dev.sibr.borg.database')
+    BACKUP_VOLUMES=$(docker_label 'dev.sibr.borg.volumes.backup')
 
-    if [[ "$BACKUP_VOLUMES" = "true" && $SKIP_MOUNTS -eq 0 ]]; then        
+    # Get containers that are dependent on this one
+
+    DEPENDENT_CONTAINERS=()
+    get_dependents $ARCHIVE_NAME
+
+    suspend_dependents
+    trap resume_dependents EXIT
+
+    if [[ "$BACKUP_VOLUMES" = "true" && $SKIP_MOUNTS -eq 0 ]]; then
         #Step 0. Figure out our stack name -- com.docker.stack.namespace
-        STACK_NAME=$(echo $DOCKER_DATA | "$JQ" -r .Config.Labels[\"com.docker.stack.namespace\"])
+        STACK_NAME=$(docker_label 'com.docker.stack.namespace')
 
         echo "Restoring $DOCKER_NAME ($STACK_NAME) mounts"
 
@@ -181,8 +232,7 @@ while read -r -u 3 CONTAINER_ID ; do
                 # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
                 COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
 
-                "$BORG" extract "${BORG_EXTRACT[@]}" $BORG_ARCHIVE_NAME --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
-
+                "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
             done 4< <(echo $DOCKER_DATA | "$JQ" -c .Mounts[])
         else
             info "No volume archive found"
@@ -190,11 +240,11 @@ while read -r -u 3 CONTAINER_ID ; do
     fi
 
     if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" && $SKIP_DATABASES -eq 0 ]]; then
-        BORG_USER=$(echo $DOCKER_DATA | "$JQ" -r '.Config.Env[]|select(startswith("BORG_USER"))' | grep -P "^BORG_USER=" | sed 's/[^=]*=//')
-        BORG_PASS=$(echo $DOCKER_DATA | "$JQ" -r '.Config.Env[]|select(startswith("BORG_PASSWORD"))' | grep -P "^BORG_PASSWORD=" | sed 's/[^=]*=//')
-        BORG_DB=$(echo $DOCKER_DATA | "$JQ" -r '.Config.Env[]|select(startswith("BORG_DB"))' | grep -P "^BORG_DB=" | sed 's/[^=]*=//')
+        BORG_USER=$(docker_env 'BORG_USER')
+        BORG_PASS=$(docker_env 'BORG_PASSWORD')
+        BORG_DB=$(docker_env 'DOCKER_DB')
 
-        DATABASE_ARCHIVE=$("$BORG" list -P $HOST-$ARCHIVE_NAME-$DATABASE_TYPE --short --last 1)
+        DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$DATABASE_TYPE" --short --last 1)
         if [[ -n $DATABASE_ARCHIVE ]]; then
             case $DATABASE_TYPE in
                 postgres|postgresql|psql)
@@ -249,6 +299,44 @@ while read -r -u 3 CONTAINER_ID ; do
                     fi
                 ;;
 
+                pgbackrest|backrest)
+                    # This is the most complicated of our restore options --
+
+                    BACKREST_STANZA=$(docker_env 'BACKREST_STANZA')
+                    BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+                    BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
+
+                    if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
+                        PGBACKREST_LOCK="/tmp/dev.sibr.docker.lock"
+
+                        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pgBackRest"
+
+                        # First up, we need to create a lock file in our container, and stop the psql instance
+                        "$DOCKER" exec -u 999 $CONTAINER_ID sh -c "touch $PGBACKREST_LOCK && pg_ctl stop"
+
+                        # Then, we need to extract our archive into BACKREST_MOUNT
+                        DIR=$(echo $BACKREST_MOUNT | rev | cut -d'/' -f2- | rev)  # Trim the file/dir name, in case we're dealing with a bind mount + file
+
+                        # Step 2. Navigate to the source
+                        cd $DIR
+
+                        # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
+                        COMMON_ROOT=$(echo $BACKREST_MOUNT | sed -e "s|.*$$STACK_NAME||")
+
+                        "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$DATABASE_ARCHIVE"
+                        # Then, we need to proc a restore
+
+                        # "${PGBACKREST_RESTORE[@]}"
+                        "$DOCKER" exec -u 999 $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --delta --log-level-console=detail restore
+
+                        # Then, delete the lock file, and allow the container to restart
+
+                        "$DOCKER" exec -u 999 $CONTAINER_ID rm "$PGBACKREST_LOCK"
+                    else
+                        info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA / PGBACKREST_DIR"
+                    fi
+                ;;
+
                 mariadb|mysql)
                     info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
 
@@ -265,11 +353,16 @@ while read -r -u 3 CONTAINER_ID ; do
         fi
     fi
 
+    resume_dependents
+    trap - EXIT
+
     cd $STARTING_DIR
-done 3< <("$DOCKER" ps --format '{{.ID}}' --filter "label=dev.sibr.borg.name" --filter "name=$CONTAINER_NAME") # Alternatively, we could use  --filter "label=dev.sibr.borg.name=$CCONTAINER_NAME"
+done 3< <("$DOCKER" ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
 
 unset BORG_REPO
 unset BORG_RSH
 unset BORG_PASSPHRASE
+
+rm $LOCKFILE
 
 # ] <-- needed because of Argbash

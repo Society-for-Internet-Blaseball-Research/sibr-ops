@@ -18,6 +18,7 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(stats,s,[Show stats from Borg])
 # ARG_OPTIONAL_BOOLEAN(skip-core,,[Skip core backup])
 # ARG_OPTIONAL_BOOLEAN(skip-docker,,[Skip docker backup])
+# ARG_OPTIONAL_BOOLEAN(skip-rclone,,[Skip rclone upload])
 # ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to backup without input])
 # ARG_OPTIONAL_BOOLEAN(wait-for-lock,,[If a lock is present, wait for other process to shut down])
 # ARG_OPTIONAL_BOOLEAN(break-lock,,[If a lock is present, break it regardless of if the other process is active])
@@ -46,8 +47,9 @@ if [[ -f $LOCKFILE ]]; then
     else
         PID=$(cat $LOCKFILE)
         if [[ -f "/proc/$PID/stat" ]]; then
+            echo "Borg is currently in use, waiting on $PID"
+            
             if [[ $_arg_wait_for_lock = "off" ]]; then
-                echo "Borg is currently in use, waiting on $PID"
                 exit 1
             fi
 
@@ -163,7 +165,7 @@ if [[ "$_arg_stats" = "on" ]]; then
     BORG_PRUNE+=("--stats")
 fi
 
-if [[ -z "$_arg_pgbackrest_type" ]]; then
+if [[ -n "$_arg_pgbackrest_type" ]]; then
     PGBACKREST_BACKUP+=("--type=$_arg_pgbackrest_type")
 fi
 
@@ -281,10 +283,10 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                     BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
                     BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 
-                    if [[ -n "$BACKREST_STANZA" ]]; then
-                        info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pgbackrest"
+                    if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
+                        info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pgbackrest ($BACKREST_MOUNT)"
 
-                        if docker exec -u 999 -i $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --log-level-console=info "${PGBACKREST_BACKUP[@]}" backup; then
+                        if docker exec -u 999 -i $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --log-level-console=detail "${PGBACKREST_BACKUP[@]}" backup; then
                             "$BORG" create "${BORG_CREATE[@]}" \
                                 --filter AME \
                                 --show-rc \
@@ -296,21 +298,6 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                     else
                         info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA"
                     fi
-
-                     "$BORG" create "${BORG_CREATE[@]}" \
-                        --filter AME \
-                        --show-rc \
-                        --compression $COMPRESSION_LEVEL \
-                        --exclude-caches \
-                        ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-                        $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-                    
-                    # "$BORG" create "${BORG_CREATE[@]}" \
-                    #     --filter AME                        \
-                    #     --show-rc                           \
-                    #     --compression $COMPRESSION_LEVEL    \
-                    #     --exclude-caches                    \
-                    #     ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
                 ;;
 
                 mariadb|mysql)
@@ -346,7 +333,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
             # MOUNTS=()
             # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 
-            local ARGS=("${BORG_CREATE[@]}")
+            ARGS=("${BORG_CREATE[@]}")
             if [[ "$DATABASE_TYPE" =~ "pgbackrest|backrest" ]]; then
                 info "Excluding pgBackRest mount"
                 BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
@@ -354,8 +341,6 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
 
                 ARGS+=("--exclude" "$BACKREST_MOUNT")
             fi
-
-            echo "Mount Exclusion: $MOUNT_EXCLUSION"
 
             if [[ -n $MOUNT_EXCLUSION ]]; then
                 ARGS+=("--exclude" "$MOUNT_EXCLUSION")
