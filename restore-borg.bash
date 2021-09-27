@@ -173,7 +173,7 @@ docker_mount() {
 
 get_dependents() {
     while read -r -u 10 CONTAINER_ID ; do
-        local NAME=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" -r '.[].Config.Labels[\"dev.sibr.borg.name\"]')
+        local NAME=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
 
         DEPENDENT_CONTAINERS+=("$CONTAINER_ID")
         if [[ -n $NAME && "$NAME" != "null" ]]; then
@@ -246,27 +246,27 @@ while read -r -u 3 CONTAINER_ID ; do
         BORG_PASS=$(docker_env 'BORG_PASSWORD')
         BORG_DB=$(docker_env 'DOCKER_DB')
 
-        DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$DATABASE_TYPE" --short --last 1)
-        if [[ -n $DATABASE_ARCHIVE ]]; then
-            RESTORE_TYPE="$DATABASE_TYPE"
+        RESTORE_TYPE="$DATABASE_TYPE"
 
-            if [[ -n "$FORCED_TYPE" ]]; then
-                if [[ "$_arg_accept" = "off" ]]; then
-                    echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
+        if [[ -n "$FORCED_TYPE" ]]; then
+            if [[ "$_arg_accept" = "off" ]]; then
+                echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
 
-                    select yn in "Yes" "No"; do
-                        case $yn in
-                            Yes ) RESTORE_TYPE="$FORCED_TYPE";;
-                            No ) ;;
-                        esac
-                    done
-                else
-                    echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
-                    RESTORE_TYPE="$_arg_force_type"
-                fi
-
+                select yn in "Yes" "No"; do
+                    case $yn in
+                        Yes ) RESTORE_TYPE="$FORCED_TYPE";;
+                        No ) ;;
+                    esac
+                done
+            else
+                echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
+                RESTORE_TYPE="$_arg_force_type"
             fi
 
+        fi
+
+        DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$RESTORE_TYPE" --short --last 1)
+        if [[ -n $DATABASE_ARCHIVE ]]; then
             case $RESTORE_TYPE in
                 postgres|postgresql|psql)
                     # Check if we have enough space to use a tmp file
@@ -365,7 +365,7 @@ while read -r -u 3 CONTAINER_ID ; do
                 ;;
 
                 *)
-                    info "Failing to restore $ARCHIVE_NAME into $DOCKER_NAME - unknown database type $DATABASE_TYPE"
+                    info "Failing to restore $ARCHIVE_NAME into $DOCKER_NAME - unknown database type $RESTORE_TYPE"
                 ;;
 
             esac
