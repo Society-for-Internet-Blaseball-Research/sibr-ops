@@ -6,6 +6,7 @@ exit 11
 #)
 # ARG_OPTIONAL_SINGLE(host,H,[Override the default host for this script])
 # ARG_OPTIONAL_SINGLE(container,,[Filter containers to restore])
+# ARG_OPTIONAL_SINGLE(force-type,,[Force database to restore via a certain method (Unstable!)])
 # ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
 # ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
 # ARG_OPTIONAL_BOOLEAN(list,,[List contents when restoring])
@@ -73,6 +74,7 @@ test "${_arg_borg_pass// }" && BORG_PASSPHRASE="$_arg_borg_pass"
 test "${_arg_borg_rsh// }" && BORG_RSH="$_arg_borg_rsh"
 HOST="${_arg_host:-$(hostname)}"
 CONTAINER_NAME="$_arg_container"
+FORCED_TYPE="$_arg_force_type"
 
 COMPRESSION_LEVEL="$_arg_compression"
 RCLONE_ACCOUNT="$_arg_rclone_account"
@@ -246,7 +248,26 @@ while read -r -u 3 CONTAINER_ID ; do
 
         DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$DATABASE_TYPE" --short --last 1)
         if [[ -n $DATABASE_ARCHIVE ]]; then
-            case $DATABASE_TYPE in
+            RESTORE_TYPE="$DATABASE_TYPE"
+
+            if [[ -n "$FORCED_TYPE" ]]; then
+                if [[ "$_arg_accept" = "off" ]]; then
+                    echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
+
+                    select yn in "Yes" "No"; do
+                        case $yn in
+                            Yes ) RESTORE_TYPE="$FORCED_TYPE";;
+                            No ) ;;
+                        esac
+                    done
+                else
+                    echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
+                    RESTORE_TYPE="$_arg_force_type"
+                fi
+
+            fi
+
+            case $RESTORE_TYPE in
                 postgres|postgresql|psql)
                     # Check if we have enough space to use a tmp file
                     DATABASE_ARCHIVE_SIZE=$("$BORG" info --json ::$DATABASE_ARCHIVE | "$JQ" .archives[].stats.original_size)
