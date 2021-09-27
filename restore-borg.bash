@@ -197,6 +197,7 @@ resume_dependents() {
 }
 
 while read -r -u 3 CONTAINER_ID ; do
+    CONTAINER_ID="$CONTAINER_ID"
     STARTING_DIR=$(pwd)
 
     DOCKER_DATA=$("$DOCKER" inspect $CONTAINER_ID | "$JQ" '.[]')
