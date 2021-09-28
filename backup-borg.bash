@@ -12,6 +12,7 @@ exit 11
 # ARG_OPTIONAL_SINGLE(transfers,,[Number of file transfers to run in parallel],[32])
 # ARG_OPTIONAL_SINGLE(pgbackrest-type,,[Type of backup to perform with pgBackRest])
 # ARG_OPTIONAL_SINGLE(database-type,,[Filter containers to backup by database type])
+# ARG_OPTIONAL_SINGLE(force-type,,[Force database to restore via a certain method (Unstable!)])
 # ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
 # ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
 # ARG_OPTIONAL_BOOLEAN(list,,[List output from Borg])
@@ -88,11 +89,13 @@ KEEP_YEARLY=3
 COMPRESSION_LEVEL="$_arg_compression"
 RCLONE_ACCOUNT="$_arg_rclone_account"
 RCLONE_BUCKET="$_arg_rclone_bucket"
+FORCED_TYPE="$_arg_force_type"
 
 VERBOSE=$_arg_verbose
 DRY_RUN=0
 SKIP_CORE=0
 SKIP_DOCKER=0
+SKIP_RCLONE=0
 
 if [[ "$_arg_dry_run" = "on" ]]; then
     DRY_RUN=1
@@ -104,6 +107,10 @@ fi
 
 if [[ "$_arg_skip_docker" = "on" ]]; then
     SKIP_DOCKER=1
+fi
+
+if [[ "$_arg_skip_rclone" = "on" ]]; then
+    SKIP_RCLONE=1
 fi
 
 FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
@@ -196,13 +203,7 @@ if [[ $SKIP_CORE -eq 0 ]]; then
         --compression $COMPRESSION_LEVEL \
         --exclude-caches \
         --exclude '/var/lib/docker/volumes/' \
-        --exclude '/srv/docker/mediawiki*/db_data' \
-        --exclude '/srv/docker/mediawiki*/db_backups' \
-        --exclude '/srv/docker/matomo/db' \
-        --exclude '/srv/docker/councilwiki/db_data' \
-        --exclude '/srv/docker/glolfwiki/db_data' \
-        --exclude '/srv/docker/datablase/nginx/cache' \
-        --exclude '/var/lib/docker/volumes/netdata_netdatacache' \
+        --exclude '/srv/docker/' \
         --exclude '/var/cache' \
         --exclude '/home/*/.cache/*' \
         --exclude '/var/tmp/*' \
@@ -214,7 +215,7 @@ if [[ $SKIP_CORE -eq 0 ]]; then
         /etc \
         /storage
 
-    if [[ $DRY_RUN -eq 0 ]]; then
+    if [[ $DRY_RUN -eq 0 && $SKIP_RCLONE -eq 0 ]]; then
         if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
             info "Uploading backups with rclone"
 
@@ -257,7 +258,35 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
             # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
 
-            case $DATABASE_TYPE in
+            BACKUP_TYPE="$DATABASE_TYPE"
+
+            if [[ -n "$FORCED_TYPE" ]]; then
+                if [[ "$_arg_accept" = "off" ]]; then
+                    echo "Are you SURE you wish to backup this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
+
+                    select yn in "Yes" "No" "Exit"; do
+                        case $yn in
+                            Yes ) 
+                                BACKUP_TYPE="$FORCED_TYPE"
+                                break
+                                ;;
+                            No ) 
+                                break
+                                ;;
+
+                            Exit )
+                                exit
+                                ;;
+                        esac
+                    done
+                else
+                    echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
+                    BACKUP_TYPE="$FORCED_TYPE"
+                fi
+
+            fi
+
+            case $BACKUP_TYPE in
                 postgres|postgresql|psql)
                     BORG_USER=$(docker_env 'BORG_USER')
                     BORG_PASS=$(docker_env 'BORG_PASSWORD')
@@ -271,7 +300,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                             --show-rc                           \
                             --compression $COMPRESSION_LEVEL    \
                             --exclude-caches                    \
-                            ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                            ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" -
                     else
                         info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
                     fi
@@ -292,7 +321,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                                 --show-rc \
                                 --compression $COMPRESSION_LEVEL \
                                 --exclude-caches \
-                                ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" \
+                                ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" \
                                 "$BACKREST_MOUNT"
                         fi
                     else
@@ -313,14 +342,14 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                             --show-rc                           \
                             --compression $COMPRESSION_LEVEL    \
                             --exclude-caches                    \
-                            ::"{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-{now}" -
+                            ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" -
                     else
                         info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
                     fi
                 ;;
 
                 *)
-                    info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $DATABASE_TYPE"
+                    info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $BACKUP_TYPE"
                 ;;
 
             esac
@@ -355,7 +384,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                 $(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
         fi
 
-        if [[ $DRY_RUN -eq 0 ]]; then
+        if [[ $DRY_RUN -eq 0 && $SKIP_RCLONE -eq 0 ]]; then
             if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
                 info "Uploading $ARCHIVE_NAME backups with rclone"
 
@@ -365,9 +394,9 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
             fi
         fi
 
-        info "Pruning $ARCHIVE_NAME backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
-
         if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+            info "Pruning $ARCHIVE_NAME database backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+
             "$BORG" prune "${BORG_PRUNE[@]}" \
                 --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
                 --show-rc \
@@ -378,6 +407,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
         fi
 
         if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+            info "Pruning $ARCHIVE_NAME volumes backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+        
             "$BORG" prune "${BORG_PRUNE[@]}" \
                 --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
                 --show-rc \

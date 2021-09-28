@@ -147,9 +147,9 @@ if [[ "$_arg_list" = "on" ]]; then
     PG_RESTORE+=("--list")
 fi
 
-if [[ "$_arg_stats" = "on" ]]; then
-    BORG_EXTRACT+=("--stats")
-fi
+# if [[ "$_arg_stats" = "on" ]]; then
+#     BORG_EXTRACT+=("--stats")
+# fi
 
 if [[ "$_arg_clean_databases" = "on" ]]; then
     PG_RESTORE+=("--clean")
@@ -269,7 +269,7 @@ while read -r -u 3 CONTAINER_ID ; do
                 done
             else
                 echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
-                RESTORE_TYPE="$_arg_force_type"
+                RESTORE_TYPE="$FORCED_TYPE"
             fi
 
         fi
