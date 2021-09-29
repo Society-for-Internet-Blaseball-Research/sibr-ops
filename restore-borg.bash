@@ -244,7 +244,7 @@ while read -r -u 3 CONTAINER_ID ; do
     if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" && $SKIP_DATABASES -eq 0 ]]; then
         BORG_USER=$(docker_env 'BORG_USER')
         BORG_PASS=$(docker_env 'BORG_PASSWORD')
-        BORG_DB=$(docker_env 'DOCKER_DB')
+        BORG_DB=$(docker_env 'BORG_DB')
 
         RESTORE_TYPE="$DATABASE_TYPE"
 
@@ -309,8 +309,14 @@ while read -r -u 3 CONTAINER_ID ; do
                             fi
                         fi
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
-
+                        if [[ $TMP_EXISTS -eq 0 ]]; then
+                            # few ways of extracting out a file -
+                            # 1. Use a pipe to extract from borg to stdout, then into docker dd
+                            # This is ~170 MB/s
+                            # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
+                            "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
+                        fi
+                        
                         # https://stackoverflow.com/a/34271562
                         printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
