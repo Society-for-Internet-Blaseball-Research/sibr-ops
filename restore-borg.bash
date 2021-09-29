@@ -312,9 +312,9 @@ while read -r -u 3 CONTAINER_ID ; do
                         "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
 
                         # https://stackoverflow.com/a/34271562
-                        # printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
+                        printf -v PG_RESTORE_ARGS '%q' "${PG_RESTORE[@]}"
 
-                        "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
+                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" bash -xc 'pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "$PG_RESTORE_ARGS" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"'
 
                         if [[ $KEEP_TMP -eq 0 ]]; then
                             "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
@@ -323,9 +323,9 @@ while read -r -u 3 CONTAINER_ID ; do
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
 
                         # https://stackoverflow.com/a/34271562
-                        # printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
+                        printf -v PG_RESTORE_ARGS '%q' "${PG_RESTORE[@]}"
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username=$BORG_USER --dbname=$BORG_DB
+                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID bash -xc 'pg_restore "$PG_RESTORE_ARGS" --username=$BORG_USER --dbname=$BORG_DB'
                     fi
                 ;;
 
