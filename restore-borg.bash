@@ -282,11 +282,22 @@ while read -r -u 3 CONTAINER_ID ; do
                     DATABASE_ARCHIVE_SIZE=$("$BORG" info --json ::$DATABASE_ARCHIVE | "$JQ" .archives[].stats.original_size)
                     FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
 
+                    ARCHIVE_DIR="/tmp/sibr"
+                    ARCHIVE_LOCATION="$ARCHIVE_DIR/pg_restore-$ARCHIVE_NAME"
+
+                    TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
+                    TMP_EXISTS=0
+                    if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+                        if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
+                            TMP_EXISTS=1
+                        fi
+                    fi
+
                     CREATE_TMP=0
 
                     if [[ "$_arg_force_tmp" = "on" ]]; then
                         CREATE_TMP=1
-                    elif [[ "$_arg_skip_tmp" = "off" && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
+                    elif [[ "$_arg_skip_tmp" = "off" && $TMP_EXISTS -eq 0 && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then 
                         TMP_AVAILABLE=$(( $FREE_SPACE - $DATABASE_ARCHIVE_SIZE - ($DATABASE_ARCHIVE_SIZE / 2) )) #Bash doesn't support floating point maths
 
                         if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
@@ -294,20 +305,10 @@ while read -r -u 3 CONTAINER_ID ; do
                         fi
                     fi
 
-                    if [[ $CREATE_TMP -eq 1 ]]; then
-                        ARCHIVE_DIR="/tmp/sibr"
-                        ARCHIVE_LOCATION="$ARCHIVE_DIR/pg_restore-$ARCHIVE_NAME"
+                    if [[ $CREATE_TMP -eq 1 || $TMP_EXISTS -eq 1 ]]; then
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME ($CONTAINER_ID) via pg_restore + $ARCHIVE_LOCATION"
 
                         "$DOCKER" exec -u 0 "$CONTAINER_ID" mkdir -p "$ARCHIVE_DIR"
-
-                        TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
-                        TMP_EXISTS=0
-                        if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
-                            if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
-                                TMP_EXISTS=1
-                            fi
-                        fi
 
                         if [[ $TMP_EXISTS -eq 0 ]]; then
                             # few ways of extracting out a file -
@@ -320,7 +321,7 @@ while read -r -u 3 CONTAINER_ID ; do
                         # https://stackoverflow.com/a/34271562
                         printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" bash -xc "pg_restore --username=$BORG_USER --dbname=$BORG_DB $PG_RESTORE_ARGS --jobs=$(nproc --all) $ARCHIVE_LOCATION"
+                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
 
                         if [[ $KEEP_TMP -eq 0 ]]; then
                             "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
@@ -331,7 +332,7 @@ while read -r -u 3 CONTAINER_ID ; do
                         # https://stackoverflow.com/a/34271562
                         printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID bash -xc "pg_restore $PG_RESTORE_ARGS --username=$BORG_USER --dbname=$BORG_DB"
+                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
                     fi
                 ;;
 
