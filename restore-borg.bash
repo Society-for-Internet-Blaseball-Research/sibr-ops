@@ -283,7 +283,7 @@ while read -r -u 3 CONTAINER_ID ; do
                     FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
 
                     ARCHIVE_DIR="/tmp/sibr"
-                    ARCHIVE_LOCATION="$ARCHIVE_DIR/pg_restore-$ARCHIVE_NAME"
+                    ARCHIVE_LOCATION="$ARCHIVE_DIR/stdin"
 
                     TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
                     TMP_EXISTS=0
@@ -315,7 +315,22 @@ while read -r -u 3 CONTAINER_ID ; do
                             # 1. Use a pipe to extract from borg to stdout, then into docker dd
                             # This is ~170 MB/s
                             # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
-                            "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
+                            # 2. Use a pipe to extract a tar from borg to stdout, pass to docker cp
+                            # This is ~310 MB/s
+                            # "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - $CONTAINER_ID:$ARCHIVE_DIR"
+                            # 3. Extract to tmp folder in docker directly (Not the ~best~ idea, but should work)
+                            # This is slightly slower than the above, from the looks of it
+                            # cd "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_DIR" && "$BORG" extract "::$DATABASE_ARCHIVE" --progress
+
+                            if command -v pv &> /dev/null
+                            then
+                                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
+                            else
+                                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
+                            fi
+
+
+                            # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
                         fi
                         
                         # https://stackoverflow.com/a/34271562
@@ -323,8 +338,16 @@ while read -r -u 3 CONTAINER_ID ; do
 
                         "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
 
+                        sleep 5
+
                         if [[ $KEEP_TMP -eq 0 ]]; then
                             "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
+                        elif [[ -z $("$DOCKER" ps --filter "id=$CONTAINER_ID" --format '{{.ID}}') ]]; then
+                            info "Removing tmp file as container has been shut down"
+
+                            # We have to use a manual dir remove since the container is down
+
+                            rm "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_LOCATION"
                         fi
                     else
                         info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
@@ -332,7 +355,7 @@ while read -r -u 3 CONTAINER_ID ; do
                         # https://stackoverflow.com/a/34271562
                         printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
+                        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
                     fi
                 ;;
 
