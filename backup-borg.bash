@@ -191,6 +191,30 @@ docker_mount() {
     echo "$DOCKER_DATA" | jq -r $JQ_FILTER
 }
 
+# usage: docker_file_env CONTAINER_ID VAR [DEFAULT]
+#    ie: docker_file_env 'abcdef1234' 'XYZ_DB_PASSWORD' 'example'
+# (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
+#  "$XYZ_DB_PASSWORD" from a file, especially for Docker's secrets feature)
+docker_file_env() {
+	local var="$1"
+	local fileVar="${var}_FILE"
+	local def="${2:-}"
+    local varVal="$(docker_env "$var")"
+    local fileVarVal="$(docker_env "$fileVar")"
+	if [ "$varVal" ] && [ "$fileVarVal" ]; then
+		echo >&2 "error: both $var and $fileVar are set (but are exclusive)"
+		return 1
+	fi
+	local val="$def"
+	if [ "$varVal" ]; then
+		val="$varVal"
+	elif [ "$fileVarVal" ]; then
+		val="$(docker exec "$1" cat "$fileVarVal")"
+	fi
+	export "$var"="$val"
+	unset "$fileVar"
+}
+
 if [[ $SKIP_CORE -eq 0 ]]; then
     info "Starting core backup for $HOSTNAME"
 
@@ -288,9 +312,9 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
 
             case $BACKUP_TYPE in
                 postgres|postgresql|psql)
-                    BORG_USER=$(docker_env 'BORG_USER')
-                    BORG_PASS=$(docker_env 'BORG_PASSWORD')
-                    BORG_DB=$(docker_env 'BORG_DB')
+                    BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
+                    BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
+                    BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
 
                     if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
                         info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
@@ -308,8 +332,8 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
 
                 pgbackrest|backrest)
                     # pgBackRest doesn't quite work in the same way as our other dumps; we want to force a backup, then do a borg backup of that volume
-                    BACKREST_STANZA=$(docker_env 'BACKREST_STANZA')
-                    BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+                    BACKREST_STANZA=$(docker_file_env "$CONTAINER_ID" 'BACKREST_STANZA')
+                    BACKREST_DIR=$(docker_file_env "$CONTAINER_ID" 'PGBACKREST_DIR')
                     BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 
                     if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
@@ -330,9 +354,9 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
                 ;;
 
                 mariadb|mysql)
-                    BORG_USER=$(docker_env 'BORG_USER')
-                    BORG_PASS=$(docker_env 'BORG_PASSWORD')
-                    BORG_DB=$(docker_env 'BORG_DB')
+                    BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
+                    BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
+                    BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
 
                     if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
                         info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"

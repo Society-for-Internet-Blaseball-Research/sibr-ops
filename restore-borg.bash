@@ -171,6 +171,30 @@ docker_mount() {
     echo "$DOCKER_DATA" | "$JQ" -r $JQ_FILTER
 }
 
+# usage: docker_file_env CONTAINER_ID VAR [DEFAULT]
+#    ie: docker_file_env 'abcdef1234' 'XYZ_DB_PASSWORD' 'example'
+# (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
+#  "$XYZ_DB_PASSWORD" from a file, especially for Docker's secrets feature)
+docker_file_env() {
+	local var="$1"
+	local fileVar="${var}_FILE"
+	local def="${2:-}"
+    local varVal="$(docker_env "$var")"
+    local fileVarVal="$(docker_env "$fileVar")"
+	if [ "$varVal" ] && [ "$fileVarVal" ]; then
+		echo >&2 "error: both $var and $fileVar are set (but are exclusive)"
+		return 1
+	fi
+	local val="$def"
+	if [ "$varVal" ]; then
+		val="$varVal"
+	elif [ "$fileVarVal" ]; then
+		val="$(docker exec "$1" cat "$fileVarVal")"
+	fi
+	export "$var"="$val"
+	unset "$fileVar"
+}
+
 get_dependents() {
     while read -r -u 10 DEP_CONTAINER_ID ; do
         local NAME=$("$DOCKER" inspect $DEP_CONTAINER_ID | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
@@ -242,9 +266,9 @@ while read -r -u 3 CONTAINER_ID ; do
     fi
 
     if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" && $SKIP_DATABASES -eq 0 ]]; then
-        BORG_USER=$(docker_env 'BORG_USER')
-        BORG_PASS=$(docker_env 'BORG_PASSWORD')
-        BORG_DB=$(docker_env 'BORG_DB')
+        BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
+        BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
+        BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
 
         RESTORE_TYPE="$DATABASE_TYPE"
 
@@ -362,8 +386,8 @@ while read -r -u 3 CONTAINER_ID ; do
                 pgbackrest|backrest)
                     # This is the most complicated of our restore options --
 
-                    BACKREST_STANZA=$(docker_env 'BACKREST_STANZA')
-                    BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+                    BACKREST_STANZA=$(docker_file_env "$CONTAINER_ID" 'BACKREST_STANZA')
+                    BACKREST_DIR=$(docker_file_env "$CONTAINER_ID" 'PGBACKREST_DIR')
                     BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 
                     if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
