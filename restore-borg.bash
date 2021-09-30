@@ -144,7 +144,7 @@ fi
 
 if [[ "$_arg_list" = "on" ]]; then
     BORG_EXTRACT+=("--list")
-    PG_RESTORE+=("--list")
+    # PG_RESTORE+=("--list")
 fi
 
 # if [[ "$_arg_stats" = "on" ]]; then
@@ -321,8 +321,8 @@ while read -r -u 3 CONTAINER_ID ; do
                         # https://stackoverflow.com/a/34271562
                         printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" bash -xc "pg_restore --username=$BORG_USER --dbname=$BORG_DB $PG_RESTORE_ARGS --jobs=$(nproc --all) $ARCHIVE_LOCATION"
-                        
+                        "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
+
                         if [[ $KEEP_TMP -eq 0 ]]; then
                             "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
                         fi
