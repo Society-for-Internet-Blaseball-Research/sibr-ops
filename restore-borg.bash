@@ -20,6 +20,7 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(force-tmp,,[Force database restoration to use a temporary file])
 # ARG_OPTIONAL_BOOLEAN(skip-tmp,,[Force database restoration to skip using a temporary file])
 # ARG_OPTIONAL_BOOLEAN(keep-tmp,,[Keep the temporary file after restoring from it])
+# ARG_OPTIONAL_BOOLEAN(swarm,,[Treat services as swarms])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -85,6 +86,7 @@ DRY_RUN=0
 SKIP_MOUNTS=0
 SKIP_DATABASES=0
 KEEP_TMP=0
+SWARM=0
 
 if [[ "$_arg_dry_run" = "on" ]]; then
     DRY_RUN=1
@@ -102,6 +104,10 @@ if [[ "$_arg_keep_tmp" = "on" ]]; then
     KEEP_TMP=1
 fi
 
+if [[ "$_arg_swarm" = "on" ]]; then
+    SWARM=1
+fi
+
 FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
 if [[ -n "$_arg_container" ]]; then
     FILTER_ARGS+=("--filter" "name=$_arg_container")
@@ -111,7 +117,11 @@ if [[ -n "$_arg_database_type" ]]; then
     FILTER_ARGS+=("--filter" "label=dev.sibr.borg.database=$_arg_database_type")
 fi
 
-"$DOCKER" ps "${FILTER_ARGS[@]}"
+if [[ $SWARM -eq 0 ]]; then
+    "$DOCKER" ps "${FILTER_ARGS[@]}"
+else
+    "$DOCKER" service ls "${FILTER_ARGS[@]}"
+fi
 
 if [[ "$_arg_accept" = "off" ]]; then
     echo "Do you wish to restore these containers?"

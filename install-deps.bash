@@ -29,6 +29,8 @@ echo "Installing argbash..."
 git clone https://github.com/matejak/argbash.git
 cd argbash/resources
 $SUDO make install PREFIX=/usr INSTALL_COMPLETION=yes
+cd ../..
+rm -r argbash
 
 echo "Installing borg..."
 # Download and copy borg over
