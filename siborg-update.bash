@@ -9,7 +9,7 @@ mkdir -p "$COMPLETION_DIR"
 rm -rf sibr-ops
 git clone https://github.com/Society-for-Internet-Blaseball-Research/sibr-ops.git
 cd sibr-ops || exit
-cp update-borg-scripts.bash "$OPS_DIR/update-borg-scripts"
+cp siborg-update.bash "$OPS_DIR/siborg-update"
 
 BORG_REPO="$1"
 BORG_PASSPHRASE="$2"
@@ -23,9 +23,9 @@ for i in *.m4; do
     argbash "$i" -o "$OUTPUT"
     argbash "$i" --type completion --strip all -o "$COMPLETION_DIR/siborg-${i%.m4}.sh"
 
-    PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$OUTPUT_FILE"
-    PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$OUTPUT_FILE"
-    PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$OUTPUT_FILE"
+    PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$OUTPUT"
+    PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$OUTPUT"
+    PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$OUTPUT"
 done
 
 for i in *.bash; do
