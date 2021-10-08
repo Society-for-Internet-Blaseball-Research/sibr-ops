@@ -305,6 +305,18 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
       case $COMPOSE_VOLUME_TAG in
       '!!str')
         echo "Parsing as mount string..."
+
+        readarray -td: MOUNT_PARTS <<<"$COMPOSE_VOLUME:"; unset 'MOUNT_PARTS[-1]'; declare -p MOUNT_PARTS;
+
+        echo "${#MOUNT_PARTS[@]}"
+
+        case ${#MOUNT_PARTS[@]} in
+        0) echo "Invalid mount!" ;;
+        1) echo "Let Engine create a volume" ;;
+        2) echo "Path mapping *or* mode" ;;
+        3) echo "Path mapping *and* mode" ;;
+        esac
+
         ;;
       '!!map')
         echo "Parsing as map type"
