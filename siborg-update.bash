@@ -26,12 +26,18 @@ for i in *.m4; do
     PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$OUTPUT"
     PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$OUTPUT"
     PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$OUTPUT"
+
+    chmod 700 "$OUTPUT"
 done
 
 for i in *.bash; do
     [ -f "$i" ] || break
 
-    cp "$i" "$OPS_DIR/${i%.bash}"
+    OUTPUT="$OPS_DIR/${i%.bash}"
+
+    cp "$i" "$OUTPUT"
+
+    chmod 700 "$OUTPUT"
 done
 
 rm -rf sibr-ops
