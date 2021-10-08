@@ -40,4 +40,5 @@ for i in *.bash; do
     chmod 700 "$OUTPUT"
 done
 
+cd .. || exit
 rm -rf sibr-ops
