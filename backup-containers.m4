@@ -289,217 +289,142 @@ fi
 # Now we need to back up the individual databases
 
 if [[ $SKIP_DOCKER -eq 0 ]]; then
-  if [[ -n "$COMPOSE_FILE" ]]; then
-    # yq e '[.services[].volumes[]][5] | tag'
-    # yq e '[.services[].volumes[]] | length' -
-    COMPOSE_VOLUMES=$(echo "$COMPOSE_FILE" | yq e '[.services[].volumes[]]' -)
+  if [[ -n "$COMPOSE_FILE" && "$BACKUP_VOLUMES" = "true" ]]; then
+    COMPOSE_SERVICES=$(echo "$COMPOSE_FILE" | yq e '[.services[]]' -)
+    for ((service = 0; service < $(echo "$COMPOSE_SERVICES" | yq e '. | length' -); service++)); do
+      COMPOSE_VOLUMES=$(echo "$COMPOSE_SERVICES" | yq e ".[$service].volumes" -)
+      COMPOSE_LABELS=$(echo "$COMPOSE_SERVICES" | yq e "[.[$service].labels[],.[$service].deploy.labels[]][]" -)
 
-    for ((i = 0; i < $(echo "$COMPOSE_VOLUMES" | yq e '. | length' -); i++)); do
-      echo "[.services[].volumes[]][$i]"
-      COMPOSE_VOLUME=$(echo "$COMPOSE_VOLUMES" | yq e ".[$i]" -)
-      COMPOSE_VOLUME_TAG=$(echo "$COMPOSE_VOLUME" | yq e '. | tag' -)
+      MOUNTS=()
 
-      echo "$COMPOSE_VOLUME"
-      echo "Tag: $COMPOSE_VOLUME_TAG"
+      DOCKER_NAME=$(echo "$COMPOSE_FILE" | yq e ".services | keys | .[$service]" -)
 
-      case $COMPOSE_VOLUME_TAG in
-      '!!str')
-        echo "Parsing as mount string..."
+      ARCHIVE_NAME=$(echo "$COMPOSE_LABELS" | grep -P '^dev.sibr.borg.name=' | sed 's/[^=]*=//')
+      DATABASE_TYPE=$(echo "$COMPOSE_LABELS" | grep -P '^dev.sibr.borg.database=' | sed 's/[^=]*=//')
+      BACKUP_VOLUMES=$(echo "$COMPOSE_LABELS" | grep -P '^dev.sibr.borg.volumes.backup=' | sed 's/[^=]*=//')
 
-        readarray -td: MOUNT_PARTS <<<"$COMPOSE_VOLUME:"; unset 'MOUNT_PARTS[-1]'; declare -p MOUNT_PARTS;
+      info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
+      MOUNT_EXCLUSION=$(echo "$COMPOSE_LABELS" | grep -P '^dev.sibr.borg.volumes.exclude=' | sed 's/[^=]*=//')
 
-        echo "${#MOUNT_PARTS[@]}"
+      for ((i = 0; i < $(echo "$COMPOSE_VOLUMES" | yq e '. | length' -); i++)); do
+        COMPOSE_VOLUME=$(echo "$COMPOSE_VOLUMES" | yq e ".[$i]" -)
+        COMPOSE_VOLUME_TAG=$(echo "$COMPOSE_VOLUME" | yq e '. | tag' -)
 
-        case ${#MOUNT_PARTS[@]} in
-        0) echo "Invalid mount!" ;;
-        1) echo "Let Engine create a volume" ;;
-        2) echo "Path mapping *or* mode" ;;
-        3) echo "Path mapping *and* mode" ;;
+        echo "$COMPOSE_VOLUME"
+        echo "Tag: $COMPOSE_VOLUME_TAG"
+
+        case $COMPOSE_VOLUME_TAG in
+        '!!str')
+          echo "Parsing as mount string..."
+
+          readarray -td: MOUNT_PARTS <<<"$COMPOSE_VOLUME:"
+          unset 'MOUNT_PARTS[-1]'
+          declare -p MOUNT_PARTS
+
+          echo "${#MOUNT_PARTS[@]}"
+
+          case ${#MOUNT_PARTS[@]} in
+          0) echo "Invalid mount!" ;;
+          1) echo "Skipping mount path ${MOUNT_PARTS[0]}" ;;
+          2)
+            echo "Path mapping *or* mode"
+
+            if [[ "${MOUNT_PARTS[1]}" == /* ]]; then
+              echo "Path mapping: ${MOUNT_PARTS[0]} -> ${MOUNT_PARTS[1]}"
+
+              MOUNTS+=("${MOUNT_PARTS[0]}")
+            else
+              echo "Skipping mount path ${MOUNT_PARTS[0]}:${MOUNT_PARTS[1]}"
+            fi
+
+            ;;
+          3)
+            echo "Path mapping *and* mode"
+            MOUNTS+=("${MOUNT_PARTS[0]}")
+            ;;
+          esac
+
+          ;;
+        '!!map')
+          echo "Parsing as map type"
+          ;;
+        *)
+          echo "Unknown tag !!"
+          ;;
         esac
-
-        ;;
-      '!!map')
-        echo "Parsing as map type"
-        ;;
-      *)
-        echo "Unknown tag !!"
-        ;;
-      esac
+      done
     done
 
-#    while read -r -u 3 CONTAINER_ID; do
-#      DOCKER_DATA=$(docker inspect "$CONTAINER_ID" | jq '.[]')
-#      DOCKER_NAME=$(echo "$DOCKER_DATA" | jq -r .Name | cut -c2-)
+    # yq e '[.services[].volumes[]][5] | tag'
+    # yq e '[.services[].volumes[]] | length' -
+
+    echo "Backing up mounts: ${MOUNTS[@]}"
+
+#    if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+#      info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
+#      MOUNT_EXCLUSION=$(docker_label 'dev.sibr.borg.volumes.exclude')
 #
-#      ARCHIVE_NAME=$(docker_label 'dev.sibr.borg.name')
-#      DATABASE_TYPE=$(docker_label 'dev.sibr.borg.database')
-#      BACKUP_VOLUMES=$(docker_label 'dev.sibr.borg.volumes.backup')
+#      # MOUNTS=()
+#      # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
 #
-#      if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
-#        # docker inspect 14b23ea3832f | jq '.[].Config.Env[]|select(startswith("POSTGRES_DB"))'
+#      ARGS=("${BORG_CREATE[@]}")
+#      if [[ "$DATABASE_TYPE" =~ pgbackrest|backrest ]]; then
+#        info "Excluding pgBackRest mount"
+#        BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
+#        BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
 #
-#        BACKUP_TYPE="$DATABASE_TYPE"
-#
-#        if [[ -n "$FORCED_TYPE" ]]; then
-#          if [[ "$_arg_accept" = "off" ]]; then
-#            echo "Are you SURE you wish to backup this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
-#
-#            select yn in "Yes" "No" "Exit"; do
-#              case $yn in
-#              Yes)
-#                BACKUP_TYPE="$FORCED_TYPE"
-#                break
-#                ;;
-#              No)
-#                break
-#                ;;
-#
-#              Exit)
-#                exit
-#                ;;
-#              esac
-#            done
-#          else
-#            echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
-#            BACKUP_TYPE="$FORCED_TYPE"
-#          fi
-#
-#        fi
-#
-#        case $BACKUP_TYPE in
-#        postgres | postgresql | psql)
-#          BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
-#          BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
-#          BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
-#
-#          if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
-#            info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pg_dump"
-#
-#            docker exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_dump -Z0 -Fc "--username=$BORG_USER" "$BORG_DB" | "$BORG" create "${BORG_CREATE[@]}" \
-#              --filter AME \
-#              --show-rc \
-#              --compression "$COMPRESSION_LEVEL" \
-#              --exclude-caches \
-#              ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" -
-#          else
-#            info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
-#          fi
-#          ;;
-#
-#        pgbackrest | backrest)
-#          # pgBackRest doesn't quite work in the same way as our other dumps; we want to force a backup, then do a borg backup of that volume
-#          BACKREST_STANZA=$(docker_file_env "$CONTAINER_ID" 'BACKREST_STANZA')
-#          BACKREST_DIR=$(docker_file_env "$CONTAINER_ID" 'PGBACKREST_DIR')
-#          BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
-#
-#          if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
-#            info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via pgbackrest ($BACKREST_MOUNT)"
-#
-#            if docker exec -u 999 -i "$CONTAINER_ID" pgbackrest "--stanza=$BACKREST_STANZA" --log-level-console=detail "${PGBACKREST_BACKUP[@]}" backup; then
-#              "$BORG" create "${BORG_CREATE[@]}" \
-#                --filter AME \
-#                --show-rc \
-#                --compression "$COMPRESSION_LEVEL" \
-#                --exclude-caches \
-#                ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" \
-#                "$BACKREST_MOUNT"
-#            fi
-#          else
-#            info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA"
-#          fi
-#          ;;
-#
-#        mariadb | mysql)
-#          BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
-#          BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
-#          BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
-#
-#          if [[ -n "$BORG_USER" && -n "$BORG_PASS" && -n "$BORG_DB" ]]; then
-#            info "Starting backup of $DOCKER_NAME into $ARCHIVE_NAME via mysqldump"
-#
-#            docker exec -u 0 "$CONTAINER_ID" mysqldump -u "$BORG_USER" "--password=$BORG_PASS" --no-tablespaces "$BORG_DB" | "$BORG" create "${BORG_CREATE[@]}" \
-#              --filter AME \
-#              --show-rc \
-#              --compression "$COMPRESSION_LEVEL" \
-#              --exclude-caches \
-#              ::"{hostname}-$ARCHIVE_NAME-$BACKUP_TYPE-{now}" -
-#          else
-#            info "Failed to backup $DOCKER_NAME - missing BORG_USER / BORG_PASSWORD / BORG_DB"
-#          fi
-#          ;;
-#
-#        *)
-#          info "Failing to backup $DOCKER_NAME into $ARCHIVE_NAME - unknown database type $BACKUP_TYPE"
-#          ;;
-#
-#        esac
+#        ARGS+=("--exclude" "$BACKREST_MOUNT")
 #      fi
 #
-#      if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-#        info "Starting backup of volumes of $DOCKER_NAME into $ARCHIVE_NAME"
-#        MOUNT_EXCLUSION=$(docker_label 'dev.sibr.borg.volumes.exclude')
-#
-#        # MOUNTS=()
-#        # MOUNTS+=$(echo $DOCKER_DATA | jq -cr .Mounts[].Source)
-#
-#        ARGS=("${BORG_CREATE[@]}")
-#        if [[ "$DATABASE_TYPE" =~ pgbackrest|backrest ]]; then
-#          info "Excluding pgBackRest mount"
-#          BACKREST_DIR=$(docker_env 'PGBACKREST_DIR')
-#          BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
-#
-#          ARGS+=("--exclude" "$BACKREST_MOUNT")
-#        fi
-#
-#        if [[ -n $MOUNT_EXCLUSION ]]; then
-#          ARGS+=("--exclude" "$MOUNT_EXCLUSION")
-#        fi
-#
-#        mapfile -t MOUNT_SOURCES < <(echo "$DOCKER_DATA" | jq -cr .Mounts[].Source)
-#
-#        "$BORG" create "${ARGS[@]}" \
-#          --filter AME \
-#          --show-rc \
-#          --compression "$COMPRESSION_LEVEL" \
-#          --exclude-caches \
-#          ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
-#          "${MOUNT_SOURCES[@]}"
+#      if [[ -n $MOUNT_EXCLUSION ]]; then
+#        ARGS+=("--exclude" "$MOUNT_EXCLUSION")
 #      fi
 #
-#      if [[ $DRY_RUN -eq 0 && $SKIP_RCLONE -eq 0 ]]; then
-#        if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
-#          info "Uploading $ARCHIVE_NAME backups with rclone"
+#      mapfile -t MOUNT_SOURCES < <(echo "$DOCKER_DATA" | jq -cr .Mounts[].Source)
 #
-#          "$RCLONE" copy "${RCLONE_UPLOAD[@]}" --transfers "$_arg_transfers" "$BORG_REPO" "$RCLONE_ACCOUNT:/$RCLONE_BUCKET/$HOSTNAME"
-#        else
-#          info "Not using rclone"
-#        fi
+#      "$BORG" create "${ARGS[@]}" \
+#        --filter AME \
+#        --show-rc \
+#        --compression "$COMPRESSION_LEVEL" \
+#        --exclude-caches \
+#        ::"{hostname}-$ARCHIVE_NAME-volumes-{now}" \
+#        "${MOUNT_SOURCES[@]}"
+#    fi
+#
+#    if [[ $DRY_RUN -eq 0 && $SKIP_RCLONE -eq 0 ]]; then
+#      if [[ -n $RCLONE_ACCOUNT && -n $RCLONE_BUCKET && -n $RCLONE ]]; then
+#        info "Uploading $ARCHIVE_NAME backups with rclone"
+#
+#        "$RCLONE" copy "${RCLONE_UPLOAD[@]}" --transfers "$_arg_transfers" "$BORG_REPO" "$RCLONE_ACCOUNT:/$RCLONE_BUCKET/$HOSTNAME"
+#      else
+#        info "Not using rclone"
 #      fi
+#    fi
 #
-#      if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
-#        info "Pruning $ARCHIVE_NAME database backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+#    if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" ]]; then
+#      info "Pruning $ARCHIVE_NAME database backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
 #
-#        "$BORG" prune "${BORG_PRUNE[@]}" \
-#          --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
-#          --show-rc \
-#          --keep-daily $KEEP_DAILY \
-#          --keep-weekly $KEEP_WEEKLY \
-#          --keep-monthly $KEEP_MONTHLY \
-#          --keep-yearly $KEEP_YEARLY
-#      fi
+#      "$BORG" prune "${BORG_PRUNE[@]}" \
+#        --prefix "{hostname}-$ARCHIVE_NAME-$DATABASE_TYPE-" \
+#        --show-rc \
+#        --keep-daily $KEEP_DAILY \
+#        --keep-weekly $KEEP_WEEKLY \
+#        --keep-monthly $KEEP_MONTHLY \
+#        --keep-yearly $KEEP_YEARLY
+#    fi
 #
-#      if [[ "$BACKUP_VOLUMES" = "true" ]]; then
-#        info "Pruning $ARCHIVE_NAME volumes backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
+#    if [[ "$BACKUP_VOLUMES" = "true" ]]; then
+#      info "Pruning $ARCHIVE_NAME volumes backups; maintaining $KEEP_DAILY daily, $KEEP_WEEKLY weekly, $KEEP_MONTHLY monthly, and $KEEP_YEARLY yearly backups"
 #
-#        "$BORG" prune "${BORG_PRUNE[@]}" \
-#          --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
-#          --show-rc \
-#          --keep-daily $KEEP_DAILY \
-#          --keep-weekly $KEEP_WEEKLY \
-#          --keep-monthly $KEEP_MONTHLY \
-#          --keep-yearly $KEEP_YEARLY
-#      fi
-#    done 3< <(docker ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
+#      "$BORG" prune "${BORG_PRUNE[@]}" \
+#        --prefix "{hostname}-$ARCHIVE_NAME-volumes-" \
+#        --show-rc \
+#        --keep-daily $KEEP_DAILY \
+#        --keep-weekly $KEEP_WEEKLY \
+#        --keep-monthly $KEEP_MONTHLY \
+#        --keep-yearly $KEEP_YEARLY
+#    fi
+
   else
     while read -r -u 3 CONTAINER_ID; do
       DOCKER_DATA=$(docker inspect "$CONTAINER_ID" | jq '.[]')
