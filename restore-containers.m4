@@ -7,6 +7,7 @@ exit 11
 # ARG_OPTIONAL_SINGLE(host,H,[Override the default host for this script])
 # ARG_OPTIONAL_SINGLE(container,,[Filter containers to restore])
 # ARG_OPTIONAL_SINGLE(force-type,,[Force database to restore via a certain method (Unstable!)])
+# ARG_OPTIONAL_SINGLE(compose-file,,[Docker-Compose file to read from, - to read from stdin])
 # ARG_OPTIONAL_BOOLEAN(dry-run,n,[Simulate operations without any output])
 # ARG_OPTIONAL_BOOLEAN(progress,P,[Show progress bar])
 # ARG_OPTIONAL_BOOLEAN(list,,[List contents when restoring])
@@ -85,7 +86,6 @@ DRY_RUN=0
 SKIP_MOUNTS=0
 SKIP_DATABASES=0
 KEEP_TMP=0
-SWARM=0
 
 if [[ "$_arg_dry_run" = "on" ]]; then
   DRY_RUN=1
@@ -103,10 +103,6 @@ if [[ "$_arg_keep_tmp" = "on" ]]; then
   KEEP_TMP=1
 fi
 
-if [[ "$_arg_swarm" = "on" ]]; then
-  SWARM=1
-fi
-
 FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
 if [[ -n "$_arg_container" ]]; then
   FILTER_ARGS+=("--filter" "name=$_arg_container")
@@ -116,10 +112,14 @@ if [[ -n "$_arg_database_type" ]]; then
   FILTER_ARGS+=("--filter" "label=dev.sibr.borg.database=$_arg_database_type")
 fi
 
-if [[ $SWARM -eq 0 ]]; then
-  "$DOCKER" ps "${FILTER_ARGS[@]}"
+if [[ -n "$_arg_compose_file" ]]; then
+  if ! COMPOSE_FILE=$(cat "$_arg_compose_file"); then
+    exit $?
+  fi
+
+  echo "$COMPOSE_FILE"
 else
-  "$DOCKER" service ls "${FILTER_ARGS[@]}"
+  "$DOCKER" ps "${FILTER_ARGS[@]}"
 fi
 
 if [[ "$_arg_accept" = "off" ]]; then
@@ -182,6 +182,33 @@ docker_mount() {
   echo "$DOCKER_DATA" | "$JQ" -r "$JQ_FILTER"
 }
 
+compose_label() {
+  echo "$COMPOSE_LABELS" | grep -P "^$1=" | sed 's/[^=]*=//'
+}
+
+compose_env() {
+  local COMPOSE_ENV
+  COMPOSE_ENV=$(echo "$COMPOSE_DATA" | yq e '.environment')
+
+  local COMPOSE_ENV_TYPE
+  COMPOSE_ENV_TYPE="$(echo "$COMPOSE_ENV" | yq e 'tag')"
+
+  case $COMPOSE_ENV_TYPE in
+  '!!map')
+    local YQ_FILTER
+    # select(.) removes if null
+    printf -v YQ_FILTER '.["%q"] | select(.)' "$1"
+    echo "$COMPOSE_ENV" | yq e "$YQ_FILTER"
+    ;;
+  '!!seq')
+    echo "$COMPOSE_ENV" | yq e '.[]' | grep -P "^$1=" | sed 's/[^=]*=//'
+    ;;
+  *)
+    echo >&2 "Unknown env type $COMPOSE_ENV_TYPE !!"
+    ;;
+  esac
+}
+
 # usage: docker_file_env CONTAINER_ID VAR [DEFAULT]
 #    ie: docker_file_env 'abcdef1234' 'XYZ_DB_PASSWORD' 'example'
 # (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
@@ -240,227 +267,318 @@ resume_dependents() {
 
 # yq e '[.services[].volumes[]][5] | tag'
 
-while read -r -u 3 CONTAINER_ID; do
-  STARTING_DIR=$(pwd)
+if [[ -n "$COMPOSE_FILE" ]]; then
+  COMPOSE_SERVICES=$(echo "$COMPOSE_FILE" | yq e '[.services[]]' -)
+  for ((service = 0; service < $(echo "$COMPOSE_SERVICES" | yq e 'length' -); service++)); do
+    COMPOSE_DATA=$(echo "$COMPOSE_SERVICES" | yq e ".[$service]")
+    COMPOSE_VOLUMES=$(echo "$COMPOSE_DATA" | yq e ".volumes" -)
+    COMPOSE_LABELS=$(echo "$COMPOSE_DATA" | yq e "[.labels[],.deploy.labels[]][]" -)
 
-  DOCKER_DATA=$("$DOCKER" inspect "$CONTAINER_ID" | "$JQ" '.[]')
-  DOCKER_NAME=$(echo "$DOCKER_DATA" | "$JQ" -r .Name | cut -c2-)
+    MOUNTS=()
 
-  ARCHIVE_NAME=$(docker_label 'dev.sibr.borg.name')
-  DATABASE_TYPE=$(docker_label 'dev.sibr.borg.database')
-  BACKUP_VOLUMES=$(docker_label 'dev.sibr.borg.volumes.backup')
+    DOCKER_NAME=$(echo "$COMPOSE_FILE" | yq e ".services | keys | .[$service]" -)
 
-  # Get containers that are dependent on this one
+    ARCHIVE_NAME=$(compose_label 'dev.sibr.borg.name')
+    DATABASE_TYPE=$(compose_label 'dev.sibr.borg.database')
+    BACKUP_VOLUMES=$(compose_label 'dev.sibr.borg.volumes.backup')
 
-  DEPENDENT_CONTAINERS=()
-  get_dependents "$ARCHIVE_NAME"
+    for ((i = 0; i < $(echo "$COMPOSE_VOLUMES" | yq e 'length' -); i++)); do
+      COMPOSE_VOLUME=$(echo "$COMPOSE_VOLUMES" | yq e ".[$i]" -)
+      COMPOSE_VOLUME_TAG=$(echo "$COMPOSE_VOLUME" | yq e 'tag' -)
 
-  suspend_dependents
-  trap resume_dependents EXIT
+      echo "$COMPOSE_VOLUME"
+      echo "Tag: $COMPOSE_VOLUME_TAG"
 
-  if [[ "$BACKUP_VOLUMES" = "true" && $SKIP_MOUNTS -eq 0 ]]; then
-    #  docker service ps --format '{{.CurrentState}}' glolfwiki_database | head -2 | grep 'Rejected'
-    #Step 0. Figure out our stack name -- com.docker.stack.namespace
-    STACK_NAME=$(docker_label 'com.docker.stack.namespace')
+      case $COMPOSE_VOLUME_TAG in
+      '!!str')
+        echo "Parsing as mount string..."
 
-    echo "Restoring $DOCKER_NAME ($STACK_NAME) mounts"
+        readarray -td: MOUNT_PARTS <<<"$COMPOSE_VOLUME:"
+        unset 'MOUNT_PARTS[-1]'
+        declare -p MOUNT_PARTS
 
-    # Step 1. Get the Borg archive
-    VOLUMES_ARCHIVE=$("$BORG" list -P $HOST-$ARCHIVE_NAME-volumes --short --last 1)
+        echo "${#MOUNT_PARTS[@]}"
 
-    if [[ -n $VOLUMES_ARCHIVE ]]; then
-      while read -r -u 4 MOUNT_DATA; do
-        MOUNT_SOURCE=$(echo $MOUNT_DATA | "$JQ" -r .Source)
-        DIR=$(echo $MOUNT_SOURCE | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+        case ${#MOUNT_PARTS[@]} in
+        0) echo "Invalid mount!" ;;
+        1) echo "Skipping mount path ${MOUNT_PARTS[0]}" ;;
+        2)
+          echo "Path mapping *or* mode"
 
-        # Step 2. Navigate to the source
-        cd $DIR
+          if [[ "${MOUNT_PARTS[1]}" == /* ]]; then
+            echo "Path mapping: ${MOUNT_PARTS[0]} -> ${MOUNT_PARTS[1]}"
 
-        # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
-        COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
+            MOUNTS+=("${MOUNT_PARTS[0]}")
+          else
+            echo "Skipping mount path ${MOUNT_PARTS[0]}:${MOUNT_PARTS[1]}"
+          fi
 
-        "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
-      done 4< <(echo $DOCKER_DATA | "$JQ" -c .Mounts[])
-    else
-      info "No volume archive found"
-    fi
-  fi
+          ;;
+        3)
+          echo "Path mapping *and* mode"
+          MOUNTS+=("${MOUNT_PARTS[0]}")
+          ;;
+        esac
 
-  if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" && $SKIP_DATABASES -eq 0 ]]; then
-    BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
-    BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
-    BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
+        ;;
+      '!!map')
+        echo "Parsing as map type"
+        ;;
+      *)
+        echo "Unknown tag !!"
+        ;;
+      esac
+    done
 
-    RESTORE_TYPE="$DATABASE_TYPE"
+    if [[ "$BACKUP_VOLUMES" = "true" && $SKIP_MOUNTS -eq 0 ]]; then
+      #  docker service ps --format '{{.CurrentState}}' glolfwiki_database | head -2 | grep 'Rejected'
 
-    if [[ -n "$FORCED_TYPE" ]]; then
-      if [[ "$_arg_accept" = "off" ]]; then
-        echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
+      echo "Restoring $DOCKER_NAME mounts"
 
-        select yn in "Yes" "No" "Exit"; do
-          case $yn in
-          Yes)
-            RESTORE_TYPE="$FORCED_TYPE"
-            break
-            ;;
-          No)
-            break
-            ;;
+      # Step 1. Get the Borg archive
+      VOLUMES_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-volumes" --short --last 1)
 
-          Exit)
-            exit
-            ;;
-          esac
+      if [[ -n $VOLUMES_ARCHIVE ]]; then
+        for MOUNT_SOURCE in "${MOUNTS[@]}"; do
+          DIR=$(echo "$MOUNT_SOURCE" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+
+          # Step 2. Navigate to the source
+          cd "$DIR" || break
+
+          "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
         done
       else
-        echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
-        RESTORE_TYPE="$FORCED_TYPE"
+        info "No volume archive found"
       fi
-
     fi
+  done
 
-    DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$RESTORE_TYPE" --short --last 1)
-    if [[ -n $DATABASE_ARCHIVE ]]; then
-      case $RESTORE_TYPE in
-      postgres | postgresql | psql)
-        # Check if we have enough space to use a tmp file
-        DATABASE_ARCHIVE_SIZE=$("$BORG" info --json ::$DATABASE_ARCHIVE | "$JQ" .archives[].stats.original_size)
-        FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
+  # yq e '[.services[].volumes[]][5] | tag'
+  # yq e '[.services[].volumes[]] | length' -
 
-        ARCHIVE_DIR="/tmp/sibr"
-        ARCHIVE_LOCATION="$ARCHIVE_DIR/stdin"
+else
+  while read -r -u 3 CONTAINER_ID; do
+    STARTING_DIR=$(pwd)
 
-        TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
-        TMP_EXISTS=0
-        if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
-          if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
-            TMP_EXISTS=1
-          fi
-        fi
+    DOCKER_DATA=$("$DOCKER" inspect "$CONTAINER_ID" | "$JQ" '.[]')
+    DOCKER_NAME=$(echo "$DOCKER_DATA" | "$JQ" -r .Name | cut -c2-)
 
-        CREATE_TMP=0
+    ARCHIVE_NAME=$(docker_label 'dev.sibr.borg.name')
+    DATABASE_TYPE=$(docker_label 'dev.sibr.borg.database')
+    BACKUP_VOLUMES=$(docker_label 'dev.sibr.borg.volumes.backup')
 
-        if [[ "$_arg_force_tmp" = "on" ]]; then
-          CREATE_TMP=1
-        elif [[ "$_arg_skip_tmp" = "off" && $TMP_EXISTS -eq 0 && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
-          TMP_AVAILABLE=$(($FREE_SPACE - $DATABASE_ARCHIVE_SIZE - ($DATABASE_ARCHIVE_SIZE / 2))) #Bash doesn't support floating point maths
+    # Get containers that are dependent on this one
 
-          if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
-            CREATE_TMP=1
-          fi
-        fi
+    DEPENDENT_CONTAINERS=()
+    get_dependents "$ARCHIVE_NAME"
 
-        if [[ $CREATE_TMP -eq 1 || $TMP_EXISTS -eq 1 ]]; then
-          info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME ($CONTAINER_ID) via pg_restore + $ARCHIVE_LOCATION"
+    suspend_dependents
+    trap resume_dependents EXIT
 
-          "$DOCKER" exec -u 0 "$CONTAINER_ID" mkdir -p "$ARCHIVE_DIR"
+    if [[ "$BACKUP_VOLUMES" = "true" && $SKIP_MOUNTS -eq 0 ]]; then
+      #  docker service ps --format '{{.CurrentState}}' glolfwiki_database | head -2 | grep 'Rejected'
+      #Step 0. Figure out our stack name -- com.docker.stack.namespace
+      STACK_NAME=$(docker_label 'com.docker.stack.namespace')
 
-          if [[ $TMP_EXISTS -eq 0 ]]; then
-            # few ways of extracting out a file -
-            # 1. Use a pipe to extract from borg to stdout, then into docker dd
-            # This is ~170 MB/s
-            # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
-            # 2. Use a pipe to extract a tar from borg to stdout, pass to docker cp
-            # This is ~310 MB/s
-            # "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - $CONTAINER_ID:$ARCHIVE_DIR"
-            # 3. Extract to tmp folder in docker directly (Not the ~best~ idea, but should work)
-            # This is slightly slower than the above, from the looks of it
-            # cd "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_DIR" && "$BORG" extract "::$DATABASE_ARCHIVE" --progress
+      echo "Restoring $DOCKER_NAME ($STACK_NAME) mounts"
 
-            if command -v pv &>/dev/null; then
-              "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
-            else
-              "$BORG" export-tar "::$DATABASE_ARCHIVE" - | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
-            fi
+      # Step 1. Get the Borg archive
+      VOLUMES_ARCHIVE=$("$BORG" list -P $HOST-$ARCHIVE_NAME-volumes --short --last 1)
 
-            # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
-          fi
-
-          # https://stackoverflow.com/a/34271562
-          printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
-
-          "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
-
-          sleep 5
-
-          if [[ $KEEP_TMP -eq 0 ]]; then
-            "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
-          elif [[ -z $("$DOCKER" ps --filter "id=$CONTAINER_ID" --format '{{.ID}}') ]]; then
-            info "Removing tmp file as container has been shut down"
-
-            # We have to use a manual dir remove since the container is down
-
-            rm "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_LOCATION"
-          fi
-        else
-          info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
-
-          # https://stackoverflow.com/a/34271562
-          printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
-
-          "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
-        fi
-        ;;
-
-      pgbackrest | backrest)
-        # This is the most complicated of our restore options --
-
-        BACKREST_STANZA=$(docker_file_env "$CONTAINER_ID" 'BACKREST_STANZA')
-        BACKREST_DIR=$(docker_file_env "$CONTAINER_ID" 'PGBACKREST_DIR')
-        BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
-
-        if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
-          PGBACKREST_LOCK="/tmp/dev.sibr.docker.lock"
-
-          info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pgBackRest"
-
-          # First up, we need to create a lock file in our container, and stop the psql instance
-          "$DOCKER" exec -u 999 $CONTAINER_ID sh -c "touch $PGBACKREST_LOCK && pg_ctl stop"
-
-          # Then, we need to extract our archive into BACKREST_MOUNT
-          DIR=$(echo $BACKREST_MOUNT | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+      if [[ -n $VOLUMES_ARCHIVE ]]; then
+        while read -r -u 4 MOUNT_DATA; do
+          MOUNT_SOURCE=$(echo $MOUNT_DATA | "$JQ" -r .Source)
+          DIR=$(echo $MOUNT_SOURCE | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
 
           # Step 2. Navigate to the source
           cd $DIR
 
           # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
-          COMMON_ROOT=$(echo $BACKREST_MOUNT | sed -e "s|.*$$STACK_NAME||")
+          COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
 
-          "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$DATABASE_ARCHIVE"
-          # Then, we need to proc a restore
-
-          # "${PGBACKREST_RESTORE[@]}"
-          "$DOCKER" exec -u 999 $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --delta --log-level-console=detail restore
-
-          # Then, delete the lock file, and allow the container to restart
-
-          "$DOCKER" exec -u 999 $CONTAINER_ID rm "$PGBACKREST_LOCK"
-        else
-          info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA / PGBACKREST_DIR"
-        fi
-        ;;
-
-      mariadb | mysql)
-        info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
-
-        "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -i -u 0 $CONTAINER_ID mysql "${MYSQL[@]}" -u $BORG_USER --password=$BORG_PASS $BORG_DB
-        ;;
-
-      *)
-        info "Failing to restore $ARCHIVE_NAME into $DOCKER_NAME - unknown database type $RESTORE_TYPE"
-        ;;
-
-      esac
-    else
-      info "No database archive found"
+          "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
+        done 4< <(echo $DOCKER_DATA | "$JQ" -c .Mounts[])
+      else
+        info "No volume archive found"
+      fi
     fi
-  fi
 
-  resume_dependents
-  trap - EXIT
+    if [[ -n $DATABASE_TYPE && "$DATABASE_TYPE" != "null" && $SKIP_DATABASES -eq 0 ]]; then
+      BORG_USER=$(docker_file_env "$CONTAINER_ID" 'BORG_USER')
+      BORG_PASS=$(docker_file_env "$CONTAINER_ID" 'BORG_PASSWORD')
+      BORG_DB=$(docker_file_env "$CONTAINER_ID" 'BORG_DB')
 
-  cd $STARTING_DIR
-done 3< <("$DOCKER" ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
+      RESTORE_TYPE="$DATABASE_TYPE"
+
+      if [[ -n "$FORCED_TYPE" ]]; then
+        if [[ "$_arg_accept" = "off" ]]; then
+          echo "Are you SURE you wish to restore this database with a different database type (Expecting $DATABASE_TYPE, told $FORCED_TYPE)?"
+
+          select yn in "Yes" "No" "Exit"; do
+            case $yn in
+            Yes)
+              RESTORE_TYPE="$FORCED_TYPE"
+              break
+              ;;
+            No)
+              break
+              ;;
+
+            Exit)
+              exit
+              ;;
+            esac
+          done
+        else
+          echo "Restoring with $FORCED_TYPE rather than $DATABASE_TYPE"
+          RESTORE_TYPE="$FORCED_TYPE"
+        fi
+
+      fi
+
+      DATABASE_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-$RESTORE_TYPE" --short --last 1)
+      if [[ -n $DATABASE_ARCHIVE ]]; then
+        case $RESTORE_TYPE in
+        postgres | postgresql | psql)
+          # Check if we have enough space to use a tmp file
+          DATABASE_ARCHIVE_SIZE=$("$BORG" info --json ::$DATABASE_ARCHIVE | "$JQ" .archives[].stats.original_size)
+          FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
+
+          ARCHIVE_DIR="/tmp/sibr"
+          ARCHIVE_LOCATION="$ARCHIVE_DIR/stdin"
+
+          TMP_SIZE=$("$DOCKER" exec -u 0 "$CONTAINER_ID" du -bP "$ARCHIVE_LOCATION" | cut -f1)
+          TMP_EXISTS=0
+          if [[ $TMP_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+            if [[ $TMP_SIZE -ge $DATABASE_ARCHIVE_SIZE ]]; then
+              TMP_EXISTS=1
+            fi
+          fi
+
+          CREATE_TMP=0
+
+          if [[ "$_arg_force_tmp" = "on" ]]; then
+            CREATE_TMP=1
+          elif [[ "$_arg_skip_tmp" = "off" && $TMP_EXISTS -eq 0 && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
+            TMP_AVAILABLE=$(($FREE_SPACE - $DATABASE_ARCHIVE_SIZE - ($DATABASE_ARCHIVE_SIZE / 2))) #Bash doesn't support floating point maths
+
+            if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
+              CREATE_TMP=1
+            fi
+          fi
+
+          if [[ $CREATE_TMP -eq 1 || $TMP_EXISTS -eq 1 ]]; then
+            info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME ($CONTAINER_ID) via pg_restore + $ARCHIVE_LOCATION"
+
+            "$DOCKER" exec -u 0 "$CONTAINER_ID" mkdir -p "$ARCHIVE_DIR"
+
+            if [[ $TMP_EXISTS -eq 0 ]]; then
+              # few ways of extracting out a file -
+              # 1. Use a pipe to extract from borg to stdout, then into docker dd
+              # This is ~170 MB/s
+              # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
+              # 2. Use a pipe to extract a tar from borg to stdout, pass to docker cp
+              # This is ~310 MB/s
+              # "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - $CONTAINER_ID:$ARCHIVE_DIR"
+              # 3. Extract to tmp folder in docker directly (Not the ~best~ idea, but should work)
+              # This is slightly slower than the above, from the looks of it
+              # cd "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_DIR" && "$BORG" extract "::$DATABASE_ARCHIVE" --progress
+
+              if command -v pv &>/dev/null; then
+                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
+              else
+                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
+              fi
+
+              # "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i "$CONTAINER_ID" dd "of=$ARCHIVE_LOCATION"
+            fi
+
+            # https://stackoverflow.com/a/34271562
+            printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
+
+            "$DOCKER" exec -u 0 -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "--username=$BORG_USER" "--dbname=$BORG_DB" "${PG_RESTORE[@]}" --jobs=$(nproc --all) "$ARCHIVE_LOCATION"
+
+            sleep 5
+
+            if [[ $KEEP_TMP -eq 0 ]]; then
+              "$DOCKER" exec -u 0 "$CONTAINER_ID" rm "$ARCHIVE_LOCATION"
+            elif [[ -z $("$DOCKER" ps --filter "id=$CONTAINER_ID" --format '{{.ID}}') ]]; then
+              info "Removing tmp file as container has been shut down"
+
+              # We have to use a manual dir remove since the container is down
+
+              rm "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_LOCATION"
+            fi
+          else
+            info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
+
+            # https://stackoverflow.com/a/34271562
+            printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
+
+            "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
+          fi
+          ;;
+
+        pgbackrest | backrest)
+          # This is the most complicated of our restore options --
+
+          BACKREST_STANZA=$(docker_file_env "$CONTAINER_ID" 'BACKREST_STANZA')
+          BACKREST_DIR=$(docker_file_env "$CONTAINER_ID" 'PGBACKREST_DIR')
+          BACKREST_MOUNT=$(docker_mount "$BACKREST_DIR")
+
+          if [[ -n "$BACKREST_STANZA" && -n "$BACKREST_MOUNT" ]]; then
+            PGBACKREST_LOCK="/tmp/dev.sibr.docker.lock"
+
+            info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pgBackRest"
+
+            # First up, we need to create a lock file in our container, and stop the psql instance
+            "$DOCKER" exec -u 999 $CONTAINER_ID sh -c "touch $PGBACKREST_LOCK && pg_ctl stop"
+
+            # Then, we need to extract our archive into BACKREST_MOUNT
+            DIR=$(echo $BACKREST_MOUNT | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+
+            # Step 2. Navigate to the source
+            cd $DIR
+
+            # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
+            COMMON_ROOT=$(echo $BACKREST_MOUNT | sed -e "s|.*$$STACK_NAME||")
+
+            "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$DATABASE_ARCHIVE"
+            # Then, we need to proc a restore
+
+            # "${PGBACKREST_RESTORE[@]}"
+            "$DOCKER" exec -u 999 $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --delta --log-level-console=detail restore
+
+            # Then, delete the lock file, and allow the container to restart
+
+            "$DOCKER" exec -u 999 $CONTAINER_ID rm "$PGBACKREST_LOCK"
+          else
+            info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA / PGBACKREST_DIR"
+          fi
+          ;;
+
+        mariadb | mysql)
+          info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
+
+          "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -i -u 0 $CONTAINER_ID mysql "${MYSQL[@]}" -u $BORG_USER --password=$BORG_PASS $BORG_DB
+          ;;
+
+        *)
+          info "Failing to restore $ARCHIVE_NAME into $DOCKER_NAME - unknown database type $RESTORE_TYPE"
+          ;;
+
+        esac
+      else
+        info "No database archive found"
+      fi
+    fi
+
+    resume_dependents
+    trap - EXIT
+
+    cd $STARTING_DIR
+  done 3< <("$DOCKER" ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
+fi
 
 unset BORG_REPO
 unset BORG_RSH
