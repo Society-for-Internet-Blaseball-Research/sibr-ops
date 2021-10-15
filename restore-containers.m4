@@ -270,7 +270,7 @@ resume_dependents() {
 if [[ -n "$COMPOSE_FILE" ]]; then
   COMPOSE_SERVICES=$(echo "$COMPOSE_FILE" | yq e '[.services[]]' -)
   for ((service = 0; service < $(echo "$COMPOSE_SERVICES" | yq e 'length' -); service++)); do
-    COMPOSE_DATA=$(echo "$COMPOSE_SERVICES" | yq e ".[$service]")
+    COMPOSE_DATA=$(echo "$COMPOSE_SERVICES" | yq e ".[$service]" -)
     COMPOSE_VOLUMES=$(echo "$COMPOSE_DATA" | yq e ".volumes" -)
     COMPOSE_LABELS=$(echo "$COMPOSE_DATA" | yq e "[.labels[],.deploy.labels[]][]" -)
 
@@ -343,7 +343,15 @@ if [[ -n "$COMPOSE_FILE" ]]; then
           DIR=$(echo "$MOUNT_SOURCE" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
 
           # Step 2. Navigate to the source
-          cd "$DIR" || break
+          if ! mkdir -p "$DIR"; then
+            info "Failed to create $DIR"
+            continue
+          fi
+
+          if ! cd "$DIR"; then
+            info "Failed to cd to $DIR"
+            continue
+          fi
 
           "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
         done
