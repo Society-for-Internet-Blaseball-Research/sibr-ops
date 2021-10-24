@@ -424,7 +424,7 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
 
       if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
         for i in "${MOUNT_SOURCES[@]}"; do
-          mapfile -t SOURCE_LINKS < <(find -L "$i" -xtype l -print0 | xargs -0 readlink -f)
+          mapfile -t SOURCE_LINKS < <(find -L "$i" -xtype l -print0 | xargs -0r readlink -f)
           MOUNT_SOURCES+=("${SOURCE_LINKS[@]}")
         done
       fi

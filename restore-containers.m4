@@ -360,7 +360,7 @@ if [[ -n "$COMPOSE_FILE" ]]; then
           "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
 
           if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
-            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0 readlink -f)
+            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0r readlink -f)
 
             for i in "${SOURCE_LINKS[@]}"; do
               DIR=$(echo "$i" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
@@ -444,7 +444,7 @@ else
           # Step 4. If we managed to restore a symlink, we should extract that too
 
           if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
-            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0 readlink -f)
+            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0r readlink -f)
 
             for i in "${SOURCE_LINKS[@]}"; do
               DIR=$(echo "$i" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
