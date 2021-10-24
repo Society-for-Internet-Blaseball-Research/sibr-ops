@@ -214,9 +214,9 @@ compose_env() {
 # (will allow for "$XYZ_DB_PASSWORD_FILE" to fill in the value of
 #  "$XYZ_DB_PASSWORD" from a file, especially for Docker's secrets feature)
 docker_file_env() {
-  local var="$1"
+  local var="$2"
   local fileVar="${var}_FILE"
-  local def="${2:-}"
+  local def="${3:-}"
   local varVal
   local fileVarVal
 
