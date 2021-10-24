@@ -221,15 +221,13 @@ docker_file_env() {
     return 1
   fi
 
-  local val="$def"
   if [ "$varVal" ]; then
-    val="$varVal"
+    echo "$varVal"
   elif [ "$fileVarVal" ]; then
-    val="$(docker exec "$1" cat "$fileVarVal")"
+    docker exec "$1" cat "$fileVarVal"
+  else
+    echo "$def"
   fi
-
-  export "$var"="$val"
-  unset "$fileVar"
 }
 
 if [[ $SKIP_CORE -eq 0 ]]; then

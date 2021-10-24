@@ -46,7 +46,7 @@ if [[ -f $LOCKFILE ]]; then
         exit 1
       fi
 
-      wait $PID
+      wait "$PID"
     fi
 
     echo "Breaking stale lockfile"
@@ -228,21 +228,20 @@ docker_file_env() {
     return 1
   fi
 
-  local val="$def"
   if [ "$varVal" ]; then
-    val="$varVal"
+    echo "$varVal"
   elif [ "$fileVarVal" ]; then
-    val="$(docker exec "$1" cat "$fileVarVal")"
+    docker exec "$1" cat "$fileVarVal"
+  else
+    echo "$def"
   fi
-
-  export "$var"="$val"
-  unset "$fileVar"
 }
 
 get_dependents() {
+  local DEP_CONTAINER_ID
   while read -r -u 10 DEP_CONTAINER_ID; do
     local NAME
-    NAME=$("$DOCKER" inspect $DEP_CONTAINER_ID | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
+    NAME=$("$DOCKER" inspect "$DEP_CONTAINER_ID" | "$JQ" -r '.[].Config.Labels["dev.sibr.borg.name"]')
 
     DEPENDENT_CONTAINERS+=("$DEP_CONTAINER_ID")
     if [[ -n $NAME && "$NAME" != "null" ]]; then
@@ -365,6 +364,7 @@ if [[ -n "$COMPOSE_FILE" ]]; then
   # yq e '[.services[].volumes[]] | length' -
 
 else
+  # shellcheck disable=SC2164
   while read -r -u 3 CONTAINER_ID; do
     STARTING_DIR=$(pwd)
 
@@ -391,21 +391,30 @@ else
       echo "Restoring $DOCKER_NAME ($STACK_NAME) mounts"
 
       # Step 1. Get the Borg archive
-      VOLUMES_ARCHIVE=$("$BORG" list -P $HOST-$ARCHIVE_NAME-volumes --short --last 1)
+      VOLUMES_ARCHIVE=$("$BORG" list -P "$HOST-$ARCHIVE_NAME-volumes" --short --last 1)
 
       if [[ -n $VOLUMES_ARCHIVE ]]; then
         while read -r -u 4 MOUNT_DATA; do
-          MOUNT_SOURCE=$(echo $MOUNT_DATA | "$JQ" -r .Source)
-          DIR=$(echo $MOUNT_SOURCE | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+          MOUNT_SOURCE=$(echo "$MOUNT_DATA" | "$JQ" -r .Source)
+          DIR=$(echo "$MOUNT_SOURCE" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
 
           # Step 2. Navigate to the source
-          cd $DIR
+          if ! mkdir -p "$DIR"; then
+            info "Failed to create $DIR"
+            continue
+          fi
+
+          if ! cd "$DIR"; then
+            info "Failed to cd to $DIR"
+            continue
+          fi
 
           # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
-          COMMON_ROOT=$(echo $MOUNT_SOURCE | sed -e "s|.*$$STACK_NAME||")
+          # shellcheck disable=SC2001
+          COMMON_ROOT=$(echo "$MOUNT_SOURCE" | sed -e "s|.*$$STACK_NAME||")
 
-          "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$VOLUMES_ARCHIVE" "re:$(echo $COMMON_ROOT | cut -c2-)"
-        done 4< <(echo $DOCKER_DATA | "$JQ" -c .Mounts[])
+          "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$COMMON_ROOT" | cut -c2-)"
+        done 4< <(echo "$DOCKER_DATA" | "$JQ" -c .Mounts[])
       else
         info "No volume archive found"
       fi
@@ -449,8 +458,8 @@ else
         case $RESTORE_TYPE in
         postgres | postgresql | psql)
           # Check if we have enough space to use a tmp file
-          DATABASE_ARCHIVE_SIZE=$("$BORG" info --json ::$DATABASE_ARCHIVE | "$JQ" .archives[].stats.original_size)
-          FREE_SPACE=$(df -B1 -P $(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir) | awk 'NR==2 {print $4}')
+          DATABASE_ARCHIVE_SIZE=$("$BORG" info --json "::$DATABASE_ARCHIVE" | "$JQ" .archives[].stats.original_size)
+          FREE_SPACE=$(df -B1 -P "$(echo "$DOCKER_DATA" | "$JQ" -r .GraphDriver.Data.MergedDir)" | awk 'NR==2 {print $4}')
 
           ARCHIVE_DIR="/tmp/sibr"
           ARCHIVE_LOCATION="$ARCHIVE_DIR/stdin"
@@ -468,7 +477,7 @@ else
           if [[ "$_arg_force_tmp" = "on" ]]; then
             CREATE_TMP=1
           elif [[ "$_arg_skip_tmp" = "off" && $TMP_EXISTS -eq 0 && $DATABASE_ARCHIVE_SIZE =~ ^-?[0-9]+([.][0-9]+)?$ ]]; then
-            TMP_AVAILABLE=$(($FREE_SPACE - $DATABASE_ARCHIVE_SIZE - ($DATABASE_ARCHIVE_SIZE / 2))) #Bash doesn't support floating point maths
+            TMP_AVAILABLE=$((FREE_SPACE - DATABASE_ARCHIVE_SIZE - (DATABASE_ARCHIVE_SIZE / 2))) #Bash doesn't support floating point maths
 
             if [[ $TMP_AVAILABLE -gt 10000000000 ]]; then
               CREATE_TMP=1
@@ -493,7 +502,7 @@ else
               # cd "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_DIR" && "$BORG" extract "::$DATABASE_ARCHIVE" --progress
 
               if command -v pv &>/dev/null; then
-                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s $DATABASE_ARCHIVE_SIZE | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
+                "$BORG" export-tar "::$DATABASE_ARCHIVE" - | pv -s "$DATABASE_ARCHIVE_SIZE" | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
               else
                 "$BORG" export-tar "::$DATABASE_ARCHIVE" - | "$DOCKER" cp - "$CONTAINER_ID:$ARCHIVE_DIR"
               fi
@@ -515,7 +524,7 @@ else
 
               # We have to use a manual dir remove since the container is down
 
-              rm "$(echo $DOCKER_DATA | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_LOCATION"
+              rm "$(echo "$DOCKER_DATA" | "$JQ" -r .GraphDriver.Data.MergedDir)$ARCHIVE_LOCATION"
             fi
           else
             info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pg_restore"
@@ -523,7 +532,7 @@ else
             # https://stackoverflow.com/a/34271562
             printf -v PG_RESTORE_ARGS '%q ' "${PG_RESTORE[@]}"
 
-            "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" $CONTAINER_ID pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
+            "$BORG" extract --stdout "${BORG_EXTRACT[@]}" "::$DATABASE_ARCHIVE" | "$DOCKER" exec -u 0 -i -e PGPASSWORD="$BORG_PASS" "$CONTAINER_ID" pg_restore "${PG_RESTORE[@]}" --username="$BORG_USER" --dbname="$BORG_DB"
           fi
           ;;
 
@@ -540,26 +549,35 @@ else
             info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via pgBackRest"
 
             # First up, we need to create a lock file in our container, and stop the psql instance
-            "$DOCKER" exec -u 999 $CONTAINER_ID sh -c "touch $PGBACKREST_LOCK && pg_ctl stop"
+            "$DOCKER" exec -u 999 "$CONTAINER_ID" sh -c "touch $PGBACKREST_LOCK && pg_ctl stop"
 
             # Then, we need to extract our archive into BACKREST_MOUNT
-            DIR=$(echo $BACKREST_MOUNT | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+            DIR=$(echo "$BACKREST_MOUNT" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
 
             # Step 2. Navigate to the source
-            cd $DIR
+            if ! mkdir -p "$DIR"; then
+              info "Failed to create $DIR"
+              continue
+            fi
+
+            if ! cd "$DIR"; then
+              info "Failed to cd to $DIR"
+              continue
+            fi
 
             # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
-            COMMON_ROOT=$(echo $BACKREST_MOUNT | sed -e "s|.*$$STACK_NAME||")
+            # shellcheck disable=SC2001
+            COMMON_ROOT=$(echo "$BACKREST_MOUNT" | sed -e "s|.*$$STACK_NAME||")
 
-            "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components $(echo $DIR | grep -o "/" | wc -l) "::$DATABASE_ARCHIVE"
+            "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$DATABASE_ARCHIVE"
             # Then, we need to proc a restore
 
             # "${PGBACKREST_RESTORE[@]}"
-            "$DOCKER" exec -u 999 $CONTAINER_ID pgbackrest "--stanza=$BACKREST_STANZA" --delta --log-level-console=detail restore
+            "$DOCKER" exec -u 999 "$CONTAINER_ID" pgbackrest "--stanza=$BACKREST_STANZA" --delta --log-level-console=detail restore
 
             # Then, delete the lock file, and allow the container to restart
 
-            "$DOCKER" exec -u 999 $CONTAINER_ID rm "$PGBACKREST_LOCK"
+            "$DOCKER" exec -u 999 "$CONTAINER_ID" rm "$PGBACKREST_LOCK"
           else
             info "Failed to backup $DOCKER_NAME - missing BACKREST_STANZA / PGBACKREST_DIR"
           fi
@@ -568,7 +586,7 @@ else
         mariadb | mysql)
           info "Starting restore of $ARCHIVE_NAME into $DOCKER_NAME via mysql"
 
-          "$BORG" extract --stdout "${BORG_EXTRACT[@]}" ::$DATABASE_ARCHIVE | "$DOCKER" exec -i -u 0 $CONTAINER_ID mysql "${MYSQL[@]}" -u $BORG_USER --password=$BORG_PASS $BORG_DB
+          "$BORG" extract --stdout "${BORG_EXTRACT[@]}" "::$DATABASE_ARCHIVE" | "$DOCKER" exec -i -u 0 "$CONTAINER_ID" mysql "${MYSQL[@]}" -u "$BORG_USER" --password="$BORG_PASS" "$BORG_DB"
           ;;
 
         *)
@@ -584,7 +602,7 @@ else
     resume_dependents
     trap - EXIT
 
-    cd $STARTING_DIR
+    cd "$STARTING_DIR"
   done 3< <("$DOCKER" ps --format '{{.ID}}' "${FILTER_ARGS[@]}")
 fi
 
