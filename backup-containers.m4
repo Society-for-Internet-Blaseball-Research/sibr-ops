@@ -23,6 +23,7 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(accept,Y,[Accept containers to backup without input])
 # ARG_OPTIONAL_BOOLEAN(wait-for-lock,,[If a lock is present, wait for other process to shut down])
 # ARG_OPTIONAL_BOOLEAN(break-lock,,[If a lock is present, break it regardless of if the other process is active])
+# ARG_OPTIONAL_BOOLEAN(follow-symlinks,,[If any of our volumes are symlinks, follow them to add them to the archive])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -96,6 +97,7 @@ DRY_RUN=0
 SKIP_CORE=0
 SKIP_DOCKER=0
 SKIP_RCLONE=0
+FOLLOW_SYMLINKS=0
 
 if [[ "$_arg_dry_run" = "on" ]]; then
   DRY_RUN=1
@@ -111,6 +113,10 @@ fi
 
 if [[ "$_arg_skip_rclone" = "on" ]]; then
   SKIP_RCLONE=1
+fi
+
+if [[ "$_arg_follow_symlinks" = "on" ]]; then
+  FOLLOW_SYMLINKS=1
 fi
 
 FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
@@ -415,6 +421,13 @@ if [[ $SKIP_DOCKER -eq 0 ]]; then
       fi
 
       mapfile -t MOUNT_SOURCES < <(echo "$DOCKER_DATA" | jq -cr .Mounts[].Source)
+
+      if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
+        for i in "${MOUNT_SOURCES[@]}"; do
+          mapfile -t SOURCE_LINKS < <(find -L "$i" -xtype l -print0 | xargs -0 readlink -f)
+          MOUNT_SOURCES+=("${SOURCE_LINKS[@]}")
+        done
+      fi
 
       "$BORG" create "${ARGS[@]}" \
         --filter AME \

@@ -21,6 +21,7 @@ exit 11
 # ARG_OPTIONAL_BOOLEAN(force-tmp,,[Force database restoration to use a temporary file])
 # ARG_OPTIONAL_BOOLEAN(skip-tmp,,[Force database restoration to skip using a temporary file])
 # ARG_OPTIONAL_BOOLEAN(keep-tmp,,[Keep the temporary file after restoring from it])
+# ARG_OPTIONAL_BOOLEAN(follow-symlinks,,[If any of our volumes have symlinks, follow them when restoring from archives])
 # ARG_OPTIONAL_SINGLE(borg-repo,,[Override the default borg repository])
 # ARG_OPTIONAL_SINGLE(borg-pass,,[Override the default borg passphrase])
 # ARG_OPTIONAL_SINGLE(borg-rsh,,[Override the default borg remote shell command])
@@ -101,6 +102,10 @@ fi
 
 if [[ "$_arg_keep_tmp" = "on" ]]; then
   KEEP_TMP=1
+fi
+
+if [[ "$_arg_follow_symlinks" = "on" ]]; then
+  FOLLOW_SYMLINKS=1
 fi
 
 FILTER_ARGS=("--filter" "label=dev.sibr.borg.name")
@@ -353,6 +358,27 @@ if [[ -n "$COMPOSE_FILE" ]]; then
           fi
 
           "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
+
+          if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
+            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0 readlink -f)
+
+            for i in "${SOURCE_LINKS[@]}"; do
+              DIR=$(echo "$i" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+
+              # Step 2. Navigate to the source
+              if ! mkdir -p "$DIR"; then
+                info "Failed to create $DIR"
+                continue
+              fi
+
+              if ! cd "$DIR"; then
+                info "Failed to cd to $DIR"
+                continue
+              fi
+
+              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
+            done
+          fi
         done
       else
         info "No volume archive found"
@@ -414,6 +440,33 @@ else
           COMMON_ROOT=$(echo "$MOUNT_SOURCE" | sed -e "s|.*$$STACK_NAME||")
 
           "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$COMMON_ROOT" | cut -c2-)"
+
+          # Step 4. If we managed to restore a symlink, we should extract that too
+
+          if [[ $FOLLOW_SYMLINKS -eq 1 ]]; then
+            mapfile -t SOURCE_LINKS < <(find -L "$DIR" -xtype l -print0 | xargs -0 readlink -f)
+
+            for i in "${SOURCE_LINKS[@]}"; do
+              DIR=$(echo "$i" | rev | cut -d'/' -f2- | rev) # Trim the file/dir name, in case we're dealing with a bind mount + file
+
+              # Step 2. Navigate to the source
+              if ! mkdir -p "$DIR"; then
+                info "Failed to create $DIR"
+                continue
+              fi
+
+              if ! cd "$DIR"; then
+                info "Failed to cd to $DIR"
+                continue
+              fi
+
+              # Step 3. Figure out the **common root** - stack names may change upon redeploy, so we shouldn't rely on them
+              # shellcheck disable=SC2001
+              COMMON_ROOT=$(echo "$i" | sed -e "s|.*$$STACK_NAME||")
+
+              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$COMMON_ROOT" | cut -c2-)"
+            done
+          fi
         done 4< <(echo "$DOCKER_DATA" | "$JQ" -c .Mounts[])
       else
         info "No volume archive found"

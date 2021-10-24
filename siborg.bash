@@ -17,6 +17,7 @@ Required arguments:
     update
     backup
     restore
+    run
 EOF
   ;;
 
@@ -24,6 +25,7 @@ update) siborg-update "$@" ;;
 
 backup) siborg-backup-containers "$@" ;;
 restore) siborg-restore-containers "$@" ;;
+run) siborg-run "$@" ;;
 
 swarm)
   BORG_FUNC="$1"

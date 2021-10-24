@@ -16,28 +16,38 @@ BORG_PASSPHRASE="$2"
 BORG_RSH="$3"
 
 for i in *.m4; do
-    [ -f "$i" ] || break
+  [ -f "$i" ] || break
 
-    OUTPUT="$OPS_DIR/siborg-${i%.m4}"
+  OUTPUT="$OPS_DIR/siborg-${i%.m4}"
 
-    argbash "$i" -o "$OUTPUT"
-    argbash "$i" --type completion --strip all -o "$COMPLETION_DIR/siborg-${i%.m4}.sh"
+  argbash "$i" -o "$OUTPUT"
+  argbash "$i" --type completion --strip all -o "$COMPLETION_DIR/siborg-${i%.m4}.sh"
 
-    PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$OUTPUT"
-    PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$OUTPUT"
-    PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$OUTPUT"
+  PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$OUTPUT"
+  PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$OUTPUT"
+  PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$OUTPUT"
 
-    chmod 700 "$OUTPUT"
+  chmod 700 "$OUTPUT"
 done
 
 for i in *.bash; do
-    [ -f "$i" ] || break
+  [ -f "$i" ] || break
 
-    OUTPUT="$OPS_DIR/${i%.bash}"
+  OUTPUT="$OPS_DIR/${i%.bash}"
 
-    cp "$i" "$OUTPUT"
+  cp "$i" "$OUTPUT"
 
-    chmod 700 "$OUTPUT"
+  chmod 700 "$OUTPUT"
+done
+
+MANUAL_UPDATES=("$OPS_DIR/siborg-run")
+
+for i in "${MANUAL_UPDATES[@]}"; do
+  if [[ -f "$i" ]]; then
+    PATTERN="$BORG_REPO" perl -pi.bak -e "s/%BORG_REPO%/\$ENV{PATTERN}/" "$i"
+    PATTERN="$BORG_PASSPHRASE" perl -pi.bak -e "s/%BORG_PASSPHRASE%/\$ENV{PATTERN}/" "$i"
+    PATTERN="$BORG_RSH" perl -pi.bak -e "s/%BORG_RSH%/\$ENV{PATTERN}/" "$i"
+  fi
 done
 
 cd .. || exit
