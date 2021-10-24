@@ -376,7 +376,7 @@ if [[ -n "$COMPOSE_FILE" ]]; then
                 continue
               fi
 
-              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$MOUNT_SOURCE" | cut -c2-)"
+              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$i" | cut -c2-)"
             done
           fi
         done
@@ -464,7 +464,7 @@ else
               # shellcheck disable=SC2001
               COMMON_ROOT=$(echo "$i" | sed -e "s|.*$$STACK_NAME||")
 
-              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$COMMON_ROOT" | cut -c2-)"
+              "$BORG" extract "${BORG_EXTRACT[@]}" --strip-components "$(echo "$DIR" | grep -o "/" | wc -l)" "::$VOLUMES_ARCHIVE" "re:$(echo "$i" | cut -c2-)"
             done
           fi
         done 4< <(echo "$DOCKER_DATA" | "$JQ" -c .Mounts[])
